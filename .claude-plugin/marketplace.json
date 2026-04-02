@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "llm-dev",
+  "description": "LLM-assisted development workflow automation",
+  "owner": {
+    "name": "Dallas Elleman",
+    "email": "dallas@evolver.chat"
+  },
+  "plugins": [
+    {
+      "name": "llm-dev",
+      "description": "Project initialization, session tracking, and transcript archival for LLM-assisted development",
+      "version": "0.4.1",
+      "author": {
+        "name": "Dallas Elleman",
+        "email": "dallas@evolver.chat"
+      },
+      "source": "./",
+      "skills": ["./skills/cycle"],
+      "category": "development",
+      "homepage": "https://github.com/DallasElleman/llm-dev"
+    }
+  ]
+}

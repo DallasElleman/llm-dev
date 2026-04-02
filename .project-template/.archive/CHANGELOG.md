@@ -1,0 +1,49 @@
+# {{PROJECT_NAME}} Changelog
+
+All notable changes to the {{PROJECT_NAME}} project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html),
+and is modified to include elements from [llm-dev](https://github.com/DallasElleman/llm-dev).
+
+llm-dev guidance:
+1. Include branch name (if applicable) and reference to related .archive/transcript(s)
+2. Link to relevant documentation or code changes
+3. Highlight architectural decisions and their rationale
+4. Strictly adhere to the listed Types of changes categories below
+
+## Types of changes
+- `Added` for new features
+- `Changed` for changes in existing functionality
+- `Deprecated` for soon-to-be removed features
+- `Removed` for now removed features
+- `Fixed` for any bug fixes
+- `Security` in case of vulnerabilities
+
+## [Unreleased]
+
+## [{{VERSION}}] - YYYY-MM-DD - {{Change Title}}
+**Branch**: `{{branch-name}}`
+**Transcript**: [###  - {{Transcript Title}}](transcripts/YYYYMMDD-transcript-name.json)
+
+### Added
+- {{New feature 1}}
+- {{New feature 2}}
+
+### Changed
+- {{Change 1}}
+- {{Change 2}}
+
+### Removed
+- {{Removed feature 1}}
+
+### Fixed
+- {{Bug fix 1}}
+
+## [1.0.0] - YYYY-MM-DD - Project Inception
+**Transcript**: [001 - Project Inception](transcripts/YYYYMMDD-project-inception.json)
+
+### Added
+- {{Initial concept and vision}}
+- {{Core architectural decisions}}
+- {{Technology stack selection}}

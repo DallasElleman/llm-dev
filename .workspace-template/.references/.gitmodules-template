@@ -1,0 +1,10 @@
+# Template for reference submodules
+# These submodules are added by /llm-dev:init-workspace
+
+[submodule ".references/12-factor-agents"]
+	path = .references/12-factor-agents
+	url = https://github.com/humanlayer/12-factor-agents.git
+
+[submodule ".references/ccpm"]
+	path = .references/ccpm
+	url = https://github.com/automazeio/ccpm.git

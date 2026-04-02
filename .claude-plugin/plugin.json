@@ -1,0 +1,17 @@
+{
+  "name": "llm-dev",
+  "description": "LLM-assisted development workflow automation - project initialization, session tracking, and transcript archival",
+  "version": "0.4.1",
+  "author": {
+    "name": "Dallas Elleman",
+    "email": "dallas@evolver.chat"
+  },
+  "repository": "https://github.com/DallasElleman/llm-dev",
+  "keywords": [
+    "development",
+    "workflow",
+    "templates",
+    "transcripts",
+    "session-management"
+  ]
+}
