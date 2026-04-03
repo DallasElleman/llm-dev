@@ -77,6 +77,8 @@ class TranscriptGenerator:
         self.user = kwargs.get('user')
         self.bump_type = kwargs.get('bump_type', 'patch')  # 'major', 'minor', or 'patch'
 
+        self.sanitize = kwargs.get('sanitize', False)
+
         # Additional outcome fields
         self.provided_files_modified = kwargs.get('files_modified', '')
         self.provided_artifacts = kwargs.get('artifacts', '')
@@ -604,11 +606,18 @@ class TranscriptGenerator:
 
         return grouped
 
-    def write_transcript(self, transcript: Dict) -> None:
-        """Write transcript to JSON file."""
+    def write_transcript(self, transcript: Dict, content_override: str = None) -> None:
+        """Write transcript to JSON file.
+
+        If content_override is provided (e.g., sanitized content), write that
+        directly instead of serializing the transcript dict.
+        """
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_file, 'w', encoding='utf-8') as f:
-            json.dump(transcript, f, indent=2, ensure_ascii=False)
+            if content_override is not None:
+                f.write(content_override)
+            else:
+                json.dump(transcript, f, indent=2, ensure_ascii=False)
 
     def update_index(self, transcript: Dict) -> None:
         """Update _index.md by replacing placeholder with actual entry."""
@@ -758,6 +767,99 @@ class TranscriptGenerator:
 """
             self.changelog_path.write_text(changelog_content, encoding='utf-8')
 
+    def _scan_pii(self, content: str) -> List[Dict]:
+        """Scan transcript content for PII patterns.
+
+        Returns a list of findings, each with 'type', 'count', and 'example'.
+        """
+        findings = []
+
+        # Home directory paths (extract username from pattern)
+        home_patterns = [
+            (r'/Users/([^/\s"]+)/', 'macOS home path'),
+            (r'/home/([^/\s"]+)/', 'Linux home path'),
+            (r'C:\\\\Users\\\\([^\\\\"\s]+)\\\\', 'Windows home path'),
+        ]
+        for pattern, label in home_patterns:
+            matches = re.findall(pattern, content)
+            if matches:
+                username = matches[0]
+                count = len(matches)
+                findings.append({
+                    'type': f'{label} (username: {username})',
+                    'count': count,
+                    'pattern': pattern,
+                    'username': username,
+                })
+
+        # Email addresses
+        email_matches = re.findall(
+            r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+            content
+        )
+        # Filter out known safe emails (Co-Authored-By, noreply)
+        email_matches = [e for e in email_matches if 'noreply@' not in e]
+        if email_matches:
+            findings.append({
+                'type': 'email address',
+                'count': len(email_matches),
+                'example': email_matches[0],
+            })
+
+        # API keys / tokens (high-entropy strings near keywords, handles JSON escaping)
+        secret_pattern = r'(?:key|token|secret|password|api_key|apikey|auth)["\s:=\\]+["\']?([a-zA-Z0-9_\-]{20,})'
+        secret_matches = re.findall(secret_pattern, content, re.IGNORECASE)
+        if secret_matches:
+            findings.append({
+                'type': 'potential secret/token',
+                'count': len(secret_matches),
+                'example': secret_matches[0][:8] + '...',
+            })
+
+        # Participant name (from self.user_name if not generic)
+        if self.user_name and self.user_name != 'User':
+            name_count = content.count(self.user_name)
+            if name_count > 0:
+                findings.append({
+                    'type': f'participant name ("{self.user_name}")',
+                    'count': name_count,
+                })
+
+        return findings
+
+    def _sanitize_content(self, content: str, findings: List[Dict]) -> str:
+        """Apply redactions to transcript content based on scan findings."""
+        sanitized = content
+
+        # Replace home directory paths
+        for finding in findings:
+            if 'username' in finding:
+                username = finding['username']
+                sanitized = sanitized.replace(f'/Users/{username}/', '/Users/<user>/')
+                sanitized = sanitized.replace(f'/home/{username}/', '/home/<user>/')
+                sanitized = sanitized.replace(
+                    f'C:\\\\Users\\\\{username}\\\\',
+                    'C:\\\\Users\\\\<user>\\\\'
+                )
+
+        # Replace participant name
+        if self.user_name and self.user_name != 'User':
+            sanitized = sanitized.replace(self.user_name, '<user>')
+
+        return sanitized
+
+    def _report_findings(self, findings: List[Dict]) -> None:
+        """Print PII scan results."""
+        print(f"\n{'='*50}")
+        print(f"PII SCAN: {len(findings)} type(s) of sensitive data found")
+        print(f"{'='*50}")
+        for f in findings:
+            line = f"  - {f['type']}: {f['count']} occurrence(s)"
+            if 'example' in f:
+                line += f" (e.g., {f['example']})"
+            print(line)
+        print()
+
     def _is_git_repo(self) -> bool:
         """Check if project directory is a git repository."""
         git_dir = self.project_dir / ".git"
@@ -861,8 +963,33 @@ class TranscriptGenerator:
             print("\n[DRY RUN COMPLETE]")
             return
 
+        # Serialize and scan for PII
+        content = json.dumps(transcript, indent=2, ensure_ascii=False)
+        findings = self._scan_pii(content)
+
+        if findings and not self.sanitize:
+            self._report_findings(findings)
+            try:
+                response = input(
+                    "Options: [c]ommit anyway / [s]anitize and commit / [a]bort: "
+                ).strip().lower()
+                if response in ('a', 'abort'):
+                    print("Aborted by user.")
+                    sys.exit(0)
+                elif response in ('s', 'sanitize'):
+                    content = self._sanitize_content(content, findings)
+                    print("Sanitized.")
+                # 'c' or 'commit' or empty: proceed as-is
+            except (KeyboardInterrupt, EOFError):
+                print("\nAborted by user.")
+                sys.exit(0)
+        elif findings and self.sanitize:
+            self._report_findings(findings)
+            content = self._sanitize_content(content, findings)
+            print("Auto-sanitized (--sanitize flag).")
+
         # Write files
-        self.write_transcript(transcript)
+        self.write_transcript(transcript, content_override=content)
         print(f"\nTranscript created: {self.output_file}")
 
         self.update_index(transcript)
@@ -936,6 +1063,11 @@ Examples:
         help='Bump major version (X.Y.Z -> X+1.0.0)'
     )
     parser.add_argument(
+        '--sanitize',
+        action='store_true',
+        help='Automatically redact PII (home paths, names) without prompting'
+    )
+    parser.add_argument(
         '--files-modified',
         type=str,
         help='Comma-separated list of modified files (e.g., "file1.py, file2.md")'
@@ -972,6 +1104,7 @@ Examples:
             session_id=args.session_id,
             topics=args.topics,
             dry_run=args.dry_run,
+            sanitize=args.sanitize,
             model=args.model,
             user=args.user,
             bump_type=bump_type,

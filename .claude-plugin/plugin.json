@@ -1,7 +1,7 @@
 {
   "name": "llm-dev",
   "description": "LLM-assisted development workflow automation - project initialization, session tracking, and transcript archival",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "author": {
     "name": "Dallas Elleman",
     "email": "dallas@evolver.chat"
