@@ -13,7 +13,14 @@ A Claude Code plugin for LLM-assisted development workflows.
 
 ## Installation
 
-### As Claude Code Plugin
+### From Marketplace (recommended)
+
+1. In Claude Code, run `/plugins`
+2. Select **Marketplaces** → **Add Marketplace**
+3. Enter `DallasElleman/llm-dev` as the marketplace source
+4. Install the llm-dev plugin
+
+### As Claude Code Plugin (manual)
 
 ```bash
 git clone https://github.com/DallasElleman/llm-dev.git ~/.claude/plugins/llm-dev
