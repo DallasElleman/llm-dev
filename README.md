@@ -6,7 +6,7 @@ A Claude Code plugin for LLM-assisted development workflows.
 
 **llm-dev** provides:
 - **Slash Commands**: `/init-session`, `/create-transcript`, `/init-project`, `/init-workspace`
-- **Skills**: `/cycle` — a structured 5-phase development loop (Review, Brainstorm, Research, Plan, Execute)
+- **Skills**: `/cycle` — a structured 6-phase development loop (Review/Reflect, Brainstorm, Research, Plan, Execute, Verify)
 - **Project Templates**: Standardized scaffolding for new projects
 - **Workspace Templates**: Multi-project workspace structure
 - **Session Tracking**: Optional conversation archival for institutional memory
@@ -89,9 +89,9 @@ Automatically:
 
 ### /cycle
 
-A structured 5-phase development loop for tasks that benefit from thinking before coding.
+A structured 6-phase development loop for tasks that benefit from thinking before coding.
 
-**Phases**: Review → Brainstorm → Research → Plan → Execute
+**Phases**: Review/Reflect → Brainstorm → Research → Plan → Execute → Verify
 
 Each phase produces a markdown file in an iteration directory. Phases can be skipped, revisited, or delegated to superpowers skills when available. Re-invoking `/cycle` in the same working directory auto-increments to the next iteration.
 
