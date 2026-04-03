@@ -128,11 +128,22 @@ class TranscriptGenerator:
         self.user_github = self._get_user_github()
 
     def _find_archive_dir(self) -> Optional[Path]:
-        """Find .archive/transcripts directory by traversing up from cwd."""
-        current = Path.cwd()
+        """Find .archive/transcripts directory by traversing up from cwd.
+
+        Only returns archive directories at or below the current working
+        directory to prevent accidentally modifying a parent project's archive.
+        """
+        cwd = Path.cwd().resolve()
+        current = cwd
         while current != current.parent:
             archive_path = current / ".archive" / "transcripts"
             if archive_path.is_dir():
+                # Verify the archive is within the cwd (not a parent project)
+                try:
+                    current.relative_to(cwd)
+                except ValueError:
+                    current = current.parent
+                    continue
                 return current / ".archive"
             current = current.parent
         return None

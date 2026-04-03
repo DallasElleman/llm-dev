@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """init-session.py - Initialize a new LLM session for transcript tracking
 
 Usage: python init-session.py [--model MODEL] [--user USERNAME] [--dry-run]

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """Initialize a new project from llm-dev template
 
 Usage: python init_project.py [project-name] [--path PATH] [--description DESC] [--dry-run]
@@ -18,9 +19,14 @@ def get_plugin_root() -> Path:
     """Get the plugin root directory from environment or relative path"""
     plugin_root = os.environ.get('CLAUDE_PLUGIN_ROOT')
     if plugin_root:
-        return Path(plugin_root)
-    # Fallback: handlers/ is inside commands/, which is inside plugin root
-    return Path(__file__).resolve().parent.parent.parent
+        root = Path(plugin_root).resolve()
+    else:
+        # Fallback: handlers/ is inside commands/, which is inside plugin root
+        root = Path(__file__).resolve().parent.parent.parent
+    # Validate that this looks like a real plugin directory
+    if not (root / ".claude-plugin" / "plugin.json").exists():
+        raise ValueError(f"Plugin root does not contain .claude-plugin/plugin.json: {root}")
+    return root
 
 
 def validate_project_name(name: str) -> bool:
@@ -307,10 +313,11 @@ def phase6_git_setup(info: dict, dry_run: bool) -> None:
         print("Staged all files")
 
         # Create initial commit
+        safe_desc = ' '.join(info['description'].split())[:200]
         commit_message = f"""Initial project setup from llm-dev template
 
 Project: {info['project_name']}
-Description: {info['description']}
+Description: {safe_desc}
 
 Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"""
 
