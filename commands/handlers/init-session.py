@@ -61,11 +61,11 @@ def get_git_username() -> str:
 def get_model_display_name(model: str) -> str:
     """Convert model ID to display name"""
     if "sonnet" in model.lower():
-        return f"Claude Sonnet 4.5 ({model})"
+        return f"Claude Sonnet 4.6 ({model})"
     elif "opus" in model.lower():
-        return f"Claude Opus 4.5 ({model})"
+        return f"Claude Opus 4.7 ({model})"
     elif "haiku" in model.lower():
-        return f"Claude Haiku ({model})"
+        return f"Claude Haiku 4.5 ({model})"
     else:
         return f"Claude ({model})"
 
@@ -116,6 +116,58 @@ def create_placeholder_entry(
 **Session**: {session_id}
 **Topics**: [To be determined]
 **Outcomes**: [Session in progress]"""
+
+
+def create_session_notes(
+    index_path: Path,
+    num_padded: str,
+    date_yyyymmdd: str,
+    date_display: str,
+    username: str,
+    model_display: str,
+    session_id: str,
+) -> Path:
+    """Create a session-notes markdown file alongside transcripts.
+
+    Returns the path to the created file. The file lives in
+    `.archive/session-notes/` next to `.archive/transcripts/`.
+    """
+    notes_dir = index_path.parent.parent / "session-notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+
+    notes_path = notes_dir / f"{date_yyyymmdd}-{num_padded}-session-notes.md"
+
+    # Don't clobber existing notes if the same session is re-initialized
+    if notes_path.exists():
+        return notes_path
+
+    template = f"""# Session {num_padded} Notes — {date_display}
+
+**Participants**: {username}, {model_display}
+**Session**: {session_id}
+
+> Living document. Update throughout the session with lessons learned, mistakes
+> made, assumptions proven wrong, and any other observations worth distilling
+> later to improve performance on similar tasks and projects.
+
+## Lessons Learned
+
+- _(none yet)_
+
+## Mistakes Made
+
+- _(none yet)_
+
+## Assumptions Proven Wrong
+
+- _(none yet)_
+
+## Other Observations
+
+- _(none yet)_
+"""
+    notes_path.write_text(template, encoding="utf-8")
+    return notes_path
 
 
 def update_index(index_path: Path, new_num: int, entry: str) -> None:
@@ -175,8 +227,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-5-20250929",
-        help="Model ID (default: claude-sonnet-4-5-20250929)"
+        default="claude-sonnet-4-6",
+        help="Model ID (default: claude-sonnet-4-6)"
     )
     parser.add_argument(
         "--user",
@@ -239,6 +291,9 @@ def main():
     print(f"Current conversation number: {current_num}")
     print(f"Initializing conversation: {new_num_padded}")
 
+    notes_dir_preview = index_path.parent.parent / "session-notes"
+    notes_path_preview = notes_dir_preview / f"{date_yyyymmdd}-{new_num_padded}-session-notes.md"
+
     if args.dry_run:
         print()
         print("[DRY RUN MODE - No files will be modified]")
@@ -247,6 +302,8 @@ def main():
         print()
         print("Would add entry:")
         print(entry)
+        print()
+        print(f"Would create session notes: {notes_path_preview}")
         print()
         print("[DRY RUN COMPLETE - No changes were made]")
         return 0
@@ -258,8 +315,27 @@ def main():
         print(f"Error updating index: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Create session notes file for in-flight learnings capture
+    try:
+        notes_path = create_session_notes(
+            index_path,
+            new_num_padded,
+            date_yyyymmdd,
+            date_display,
+            username,
+            model_display,
+            session_id,
+        )
+    except Exception as e:
+        print(f"Warning: failed to create session notes file: {e}", file=sys.stderr)
+        notes_path = None
+
     print()
     print(f"Session {new_num_padded} initialized successfully!")
+    if notes_path is not None:
+        print(f"Session notes: {notes_path}")
+        print("Update this file throughout the session with lessons, mistakes,")
+        print("and assumptions proven wrong — it will be distilled later.")
     print()
     print("At session end, run /create-transcript to archive this conversation.")
 

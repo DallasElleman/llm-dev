@@ -255,22 +255,28 @@ def phase5_initialize_archive(info: dict, dry_run: bool) -> None:
     archive_path = project_path / ".archive"
     transcripts_path = archive_path / "transcripts"
     artifacts_path = archive_path / "artifacts"
+    session_notes_path = archive_path / "session-notes"
 
     if dry_run:
         print(f"[DRY RUN] Would create: {transcripts_path}")
         print(f"[DRY RUN] Would create: {artifacts_path}")
         print(f"[DRY RUN] Would create: {artifacts_path / '.gitkeep'}")
+        print(f"[DRY RUN] Would create: {session_notes_path}")
+        print(f"[DRY RUN] Would create: {session_notes_path / '.gitkeep'}")
     else:
         transcripts_path.mkdir(parents=True, exist_ok=True)
         artifacts_path.mkdir(parents=True, exist_ok=True)
+        session_notes_path.mkdir(parents=True, exist_ok=True)
 
-        # Create .gitkeep for artifacts directory
-        gitkeep = artifacts_path / ".gitkeep"
-        gitkeep.touch()
+        # Create .gitkeep for artifacts and session-notes directories
+        (artifacts_path / ".gitkeep").touch()
+        (session_notes_path / ".gitkeep").touch()
 
         print(f"Created: .archive/transcripts/")
         print(f"Created: .archive/artifacts/")
         print(f"Created: .archive/artifacts/.gitkeep")
+        print(f"Created: .archive/session-notes/")
+        print(f"Created: .archive/session-notes/.gitkeep")
 
     print()
 
@@ -348,6 +354,7 @@ def phase7_summary(info: dict) -> None:
     print(f"  {info['project_name']}/")
     print(f"    .archive/")
     print(f"      transcripts/")
+    print(f"      session-notes/")
     print(f"      artifacts/")
     print(f"    .claude/")
     print(f"    CLAUDE.md")

@@ -72,7 +72,10 @@ Set up a multi-project workspace structure.
 
 ### /init-session
 
-Initialize a conversation session for transcript tracking.
+Initialize a conversation session for transcript tracking. Also creates a
+dated, numbered session-notes file at
+`.archive/session-notes/YYYYMMDD-NNN-session-notes.md` for capturing lessons
+learned, mistakes made, and assumptions proven wrong throughout the session.
 
 ```
 /init-session [--model MODEL] [--user USERNAME]
@@ -108,13 +111,15 @@ See [skills/cycle/SKILL.md](skills/cycle/SKILL.md) for full details.
 
 Session tracking is **optional** and **command-driven**:
 
-1. Run `/init-session` to begin tracking (creates placeholder in transcript index)
-2. At session end, run `/create-transcript` to archive the conversation
+1. Run `/init-session` to begin tracking (creates placeholder in transcript index and a session-notes file)
+2. Update `.archive/session-notes/YYYYMMDD-NNN-session-notes.md` throughout the session with lessons, mistakes, and wrong assumptions
+3. At session end, run `/create-transcript` to archive the conversation
 
 Archives include:
 - Verbatim dialogue preservation
 - Auto-generated outcomes from file operations
 - Automatic index/CHANGELOG updates
+- Per-session notes for cross-session learning distillation
 
 ## Template Placeholders
 
