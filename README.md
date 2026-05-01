@@ -5,11 +5,11 @@ A Claude Code plugin for LLM-assisted development workflows.
 ## Overview
 
 **llm-dev** provides:
-- **Slash Commands**: `/init-session`, `/create-transcript`, `/init-project`, `/init-workspace`
+- **Slash Commands**: `/init-session`, `/end-session`, `/init-project`, `/init-workspace`
 - **Skills**: `/cycle` — a structured 6-phase development loop (Review/Reflect, Brainstorm, Research, Plan, Execute, Verify)
 - **Project Templates**: Standardized scaffolding for new projects
 - **Workspace Templates**: Multi-project workspace structure
-- **Session Tracking**: Optional conversation archival for institutional memory
+- **Session Tracking**: Optional conversation archival, in-flight notes, and forward-looking handoffs for institutional memory and seamless cross-session continuity
 
 ## Installation
 
@@ -72,28 +72,41 @@ Set up a multi-project workspace structure.
 
 ### /init-session
 
-Initialize a conversation session for transcript tracking. Also creates a
-dated, numbered session-notes file at
-`.archive/session-notes/YYYYMMDD-NNN-session-notes.md` for capturing lessons
-learned, mistakes made, and assumptions proven wrong throughout the session.
+Initialize a conversation session for transcript tracking. Also:
+- Creates a dated, numbered session-notes file at
+  `.archive/session-notes/YYYYMMDD-NNN-session-notes.md` for capturing what
+  worked, lessons learned, mistakes, and wrong assumptions throughout the
+  session.
+- Surfaces the prior session's transcript, notes, and **handoff** so Claude
+  can pick up the thread where the last session left off.
 
 ```
 /init-session [--model MODEL] [--user USERNAME]
 ```
 
-### /create-transcript
+### /end-session
 
-Archive the current conversation with auto-generated summary.
+Wind the session down. Claude writes a forward-looking **handoff document**
+at `.archive/session-handoff/YYYYMMDD-NNN-session-handoff.md` (the next
+session's high-signal re-entry point), then archives the conversation.
 
 ```
-/create-transcript <number> "<title>" [--topics "t1, t2"]
+/end-session <number> "<title>" [--topics "t1, t2"]
 ```
 
 Automatically:
+- Prompts Claude to write a handoff: where we left off, wins, in-flight
+  work, deferred items, locked-in decisions, key references, gotchas, and
+  a first-action pointer for the next session
 - Detects session ID from index placeholder
 - Generates outcomes from file operations
 - Updates transcript index (replaces placeholder)
 - Updates CHANGELOG (adds entry at top)
+- Commits transcript + session-notes + session-handoff in one bundle
+
+> **Migrating from 0.7.x?** `/create-transcript` was renamed to `/end-session`
+> in 0.8.0. The new command does everything `/create-transcript` did, plus
+> the handoff step. Update any docs or aliases that reference the old name.
 
 ## Skills
 
@@ -111,15 +124,22 @@ See [skills/cycle/SKILL.md](skills/cycle/SKILL.md) for full details.
 
 Session tracking is **optional** and **command-driven**:
 
-1. Run `/init-session` to begin tracking (creates placeholder in transcript index and a session-notes file)
-2. Update `.archive/session-notes/YYYYMMDD-NNN-session-notes.md` throughout the session with lessons, mistakes, and wrong assumptions
-3. At session end, run `/create-transcript` to archive the conversation
+1. Run `/init-session` to begin tracking. This creates a placeholder in the
+   transcript index, scaffolds a session-notes file, and surfaces the prior
+   session's transcript / notes / handoff for context.
+2. Throughout the session, update
+   `.archive/session-notes/YYYYMMDD-NNN-session-notes.md` with what worked,
+   lessons learned, mistakes made, and wrong assumptions.
+3. At session end, run `/end-session`. Claude writes a forward-looking
+   handoff document at `.archive/session-handoff/`, then the handler
+   archives the conversation transcript and commits the bundle.
 
 Archives include:
 - Verbatim dialogue preservation
 - Auto-generated outcomes from file operations
 - Automatic index/CHANGELOG updates
 - Per-session notes for cross-session learning distillation
+- Per-session handoffs as high-signal re-entry points for the next session
 
 ## Template Placeholders
 
@@ -147,12 +167,12 @@ llm-dev/
 │   ├── .archive/
 │   └── projects/
 ├── commands/                 # Slash commands
-│   ├── create-transcript.md
+│   ├── end-session.md
 │   ├── init-project.md
 │   ├── init-session.md
 │   ├── init-workspace.md
 │   └── handlers/             # Python command handlers
-│       ├── create-transcript.py
+│       ├── end-session.py
 │       ├── init-project.py
 │       ├── init-session.py
 │       └── init-workspace.py

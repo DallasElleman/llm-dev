@@ -256,6 +256,7 @@ def phase5_initialize_archive(info: dict, dry_run: bool) -> None:
     transcripts_path = archive_path / "transcripts"
     artifacts_path = archive_path / "artifacts"
     session_notes_path = archive_path / "session-notes"
+    session_handoff_path = archive_path / "session-handoff"
 
     if dry_run:
         print(f"[DRY RUN] Would create: {transcripts_path}")
@@ -263,20 +264,26 @@ def phase5_initialize_archive(info: dict, dry_run: bool) -> None:
         print(f"[DRY RUN] Would create: {artifacts_path / '.gitkeep'}")
         print(f"[DRY RUN] Would create: {session_notes_path}")
         print(f"[DRY RUN] Would create: {session_notes_path / '.gitkeep'}")
+        print(f"[DRY RUN] Would create: {session_handoff_path}")
+        print(f"[DRY RUN] Would create: {session_handoff_path / '.gitkeep'}")
     else:
         transcripts_path.mkdir(parents=True, exist_ok=True)
         artifacts_path.mkdir(parents=True, exist_ok=True)
         session_notes_path.mkdir(parents=True, exist_ok=True)
+        session_handoff_path.mkdir(parents=True, exist_ok=True)
 
-        # Create .gitkeep for artifacts and session-notes directories
+        # Create .gitkeep for empty archive subdirectories
         (artifacts_path / ".gitkeep").touch()
         (session_notes_path / ".gitkeep").touch()
+        (session_handoff_path / ".gitkeep").touch()
 
         print(f"Created: .archive/transcripts/")
         print(f"Created: .archive/artifacts/")
         print(f"Created: .archive/artifacts/.gitkeep")
         print(f"Created: .archive/session-notes/")
         print(f"Created: .archive/session-notes/.gitkeep")
+        print(f"Created: .archive/session-handoff/")
+        print(f"Created: .archive/session-handoff/.gitkeep")
 
     print()
 
@@ -355,6 +362,7 @@ def phase7_summary(info: dict) -> None:
     print(f"    .archive/")
     print(f"      transcripts/")
     print(f"      session-notes/")
+    print(f"      session-handoff/")
     print(f"      artifacts/")
     print(f"    .claude/")
     print(f"    CLAUDE.md")

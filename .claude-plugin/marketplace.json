@@ -10,7 +10,7 @@
     {
       "name": "llm-dev",
       "description": "Project initialization, session tracking, and transcript archival for LLM-assisted development",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "author": {
         "name": "Dallas Elleman",
         "email": "dallas@evolver.chat"

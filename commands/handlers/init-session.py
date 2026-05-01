@@ -146,9 +146,15 @@ def create_session_notes(
 **Participants**: {username}, {model_display}
 **Session**: {session_id}
 
-> Living document. Update throughout the session with lessons learned, mistakes
-> made, assumptions proven wrong, and any other observations worth distilling
-> later to improve performance on similar tasks and projects.
+> Living document. Update throughout the session with what worked, lessons
+> learned, mistakes made, assumptions proven wrong, and any other observations
+> worth distilling later to improve performance on similar tasks and projects.
+> Capture both wins and misses — validated approaches are just as much fuel
+> for future improvement as corrections.
+
+## What Worked
+
+- _(none yet)_
 
 ## Lessons Learned
 
@@ -168,6 +174,43 @@ def create_session_notes(
 """
     notes_path.write_text(template, encoding="utf-8")
     return notes_path
+
+
+def find_latest_transcript(index_path: Path, prev_num_padded: str) -> Path | None:
+    """Find the path to the previous session's transcript JSON.
+
+    Looks up the entry by session number in the index, extracts the **File**:
+    line, and returns the full path. Returns None if not found or missing.
+    """
+    if not index_path.exists():
+        return None
+    content = index_path.read_text(encoding="utf-8")
+    # Match `### NNN - <title>` where title is NOT `[In Progress]`,
+    # then capture the next **File**: <filename> line.
+    pattern = (
+        rf"### {re.escape(prev_num_padded)} - (?!\[In Progress\])[^\n]+\n"
+        r"\*\*File\*\*:\s*([^\n]+)"
+    )
+    match = re.search(pattern, content)
+    if not match:
+        return None
+    filename = match.group(1).strip().strip("`")
+    transcript_path = index_path.parent / filename
+    return transcript_path if transcript_path.exists() else None
+
+
+def find_latest_in_dir(
+    dir_path: Path, prev_num_padded: str, suffix: str
+) -> Path | None:
+    """Find the most recent file matching *-{NNN}-{suffix} in dir_path.
+
+    Sorts by filename (filenames begin with YYYYMMDD, so lexical sort is
+    chronological). Returns None if dir missing or no matches.
+    """
+    if not dir_path.is_dir():
+        return None
+    matches = sorted(dir_path.glob(f"*-{prev_num_padded}-{suffix}"))
+    return matches[-1] if matches else None
 
 
 def update_index(index_path: Path, new_num: int, entry: str) -> None:
@@ -294,6 +337,21 @@ def main():
     notes_dir_preview = index_path.parent.parent / "session-notes"
     notes_path_preview = notes_dir_preview / f"{date_yyyymmdd}-{new_num_padded}-session-notes.md"
 
+    # Resolve prior-session context for the next session to load
+    archive_dir = index_path.parent.parent
+    prev_num = current_num
+    prev_num_padded = f"{prev_num:03d}"
+    if prev_num > 0:
+        prior_transcript = find_latest_transcript(index_path, prev_num_padded)
+        prior_notes = find_latest_in_dir(
+            archive_dir / "session-notes", prev_num_padded, "session-notes.md"
+        )
+        prior_handoff = find_latest_in_dir(
+            archive_dir / "session-handoff", prev_num_padded, "session-handoff.md"
+        )
+    else:
+        prior_transcript = prior_notes = prior_handoff = None
+
     if args.dry_run:
         print()
         print("[DRY RUN MODE - No files will be modified]")
@@ -304,6 +362,11 @@ def main():
         print(entry)
         print()
         print(f"Would create session notes: {notes_path_preview}")
+        print()
+        print("Prior-session context that would be surfaced:")
+        print(f"  Transcript: {prior_transcript or '(none found)'}")
+        print(f"  Notes:      {prior_notes or '(none found)'}")
+        print(f"  Handoff:    {prior_handoff or '(none found)'}")
         print()
         print("[DRY RUN COMPLETE - No changes were made]")
         return 0
@@ -336,8 +399,25 @@ def main():
         print(f"Session notes: {notes_path}")
         print("Update this file throughout the session with lessons, mistakes,")
         print("and assumptions proven wrong — it will be distilled later.")
+
+    # Surface prior-session context paths for Claude to Read after init
     print()
-    print("At session end, run /create-transcript to archive this conversation.")
+    if prev_num > 0:
+        print("Prior-session context (read these to pick up the thread):")
+        print(f"  Transcript: {prior_transcript or '(none found)'}")
+        print(f"  Notes:      {prior_notes or '(none found)'}")
+        print(f"  Handoff:    {prior_handoff or '(none found)'}")
+        if prior_handoff is not None:
+            print()
+            print(
+                "Follow the First Action instruction inside the handoff: greet the "
+                "user, relay your understanding, and ask before acting."
+            )
+    else:
+        print("No prior session detected — this is session 001.")
+
+    print()
+    print("At session end, run /end-session to archive this conversation.")
 
     return 0
 
