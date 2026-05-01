@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""create-transcript.py - Convert Claude Code JSONL to llm-dev transcript format
+"""end-session.py - Archive an LLM session
 
-Usage: python create-transcript.py <session-num> "<title>" [options]
+Converts the Claude Code JSONL transcript to llm-dev JSON format and commits
+it alongside the per-session notes and handoff documents.
+
+Usage: python end-session.py <session-num> "<title>" [options]
 
 Automatically:
 - Finds session ID from README placeholder or most recent JSONL
 - Converts JSONL to llm-dev JSON format with auto-generated outcomes
 - Updates README.md (replaces placeholder with actual entry)
 - Updates CHANGELOG.md (adds new entry at top)
+- Commits transcript + session-notes + session-handoff (if present)
 
 Examples:
-    python create-transcript.py 4 "Setup automation framework"
-    python create-transcript.py 5 "Refactor parser logic" --topics "python, refactoring"
-    python create-transcript.py 6 "Debug API issues" --session-id abc123 --dry-run
-    python create-transcript.py 9 "Session Title" \
+    python end-session.py 4 "Setup automation framework"
+    python end-session.py 5 "Refactor parser logic" --topics "python, refactoring"
+    python end-session.py 6 "Debug API issues" --session-id abc123 --dry-run
+    python end-session.py 9 "Session Title" \
         --topics "topic1, topic2" \
         --files-modified "orchestrate.py, CLAUDE.md" \
         --decisions "Use llm-dev template structure, Investigate root cause" \
@@ -866,7 +870,7 @@ class TranscriptGenerator:
         return git_dir.exists() and git_dir.is_dir()
 
     def _git_commit_transcripts(self) -> None:
-        """Auto-commit transcript, index, and changelog if in a git repo."""
+        """Auto-commit transcript, index, changelog, session-notes, and handoff."""
         if not self._is_git_repo():
             return
 
@@ -885,6 +889,38 @@ class TranscriptGenerator:
             # Changelog file
             changelog_rel = self.changelog_path.relative_to(self.project_dir)
             files_to_commit.append(str(changelog_rel))
+
+            # Session notes file (created by /init-session). Include if present
+            # so cross-session learnings travel with the transcript commit.
+            session_notes_path = (
+                self.archive_dir
+                / "session-notes"
+                / f"{self.date_yyyymmdd}-{self.session_num_padded}-session-notes.md"
+            )
+            if session_notes_path.exists():
+                files_to_commit.append(
+                    str(session_notes_path.relative_to(self.project_dir))
+                )
+
+            # Session handoff file (written by Claude during /end-session before
+            # the handler runs). Without it, the next session has no high-signal
+            # re-entry point — emit a warning but don't block the archive.
+            session_handoff_path = (
+                self.archive_dir
+                / "session-handoff"
+                / f"{self.date_yyyymmdd}-{self.session_num_padded}-session-handoff.md"
+            )
+            if session_handoff_path.exists():
+                files_to_commit.append(
+                    str(session_handoff_path.relative_to(self.project_dir))
+                )
+            else:
+                print(
+                    f"\nWarning: no session-handoff file found at "
+                    f"{session_handoff_path.relative_to(self.project_dir)} — "
+                    f"the next session will have no re-entry point.",
+                    file=sys.stderr,
+                )
 
             # Build commit message with date
             commit_message = f"Add transcript for session {self.date_display}"
@@ -1007,7 +1043,7 @@ class TranscriptGenerator:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Convert Claude Code JSONL to llm-dev transcript format',
+        description='End an LLM session: archive transcript, commit notes + handoff bundle',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
