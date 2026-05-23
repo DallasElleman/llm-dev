@@ -12,6 +12,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+import _session
+import _registry as _reg
+
 
 def find_transcripts_index(start_dir: Path) -> Path | None:
     """Search up from current directory to find .archive/transcripts/_index.md"""
@@ -68,36 +72,6 @@ def get_model_display_name(model: str) -> str:
         return f"Claude Haiku 4.5 ({model})"
     else:
         return f"Claude ({model})"
-
-
-def find_session_id() -> str:
-    """Find the current Claude Code session ID from most recently modified JSONL file"""
-    projects_dir = Path.home() / ".claude" / "projects"
-
-    if not projects_dir.exists():
-        return "unknown"
-
-    try:
-        # Find most recently modified .jsonl file (excluding agent- files)
-        # Only consider files modified in last 5 minutes
-        five_minutes_ago = datetime.now().timestamp() - 300
-
-        recent_files = []
-        for jsonl_file in projects_dir.glob("*.jsonl"):
-            if jsonl_file.name.startswith("agent-"):
-                continue
-
-            if jsonl_file.stat().st_mtime >= five_minutes_ago:
-                recent_files.append(jsonl_file)
-
-        if recent_files:
-            # Get the most recently modified
-            latest = max(recent_files, key=lambda p: p.stat().st_mtime)
-            return latest.stem
-    except Exception:
-        pass
-
-    return "unknown"
 
 
 def create_placeholder_entry(
@@ -202,14 +176,17 @@ def find_latest_transcript(index_path: Path, prev_num_padded: str) -> Path | Non
 def find_latest_in_dir(
     dir_path: Path, prev_num_padded: str, suffix: str
 ) -> Path | None:
-    """Find the most recent file matching *-{NNN}-{suffix} in dir_path.
+    """Find the most recent file matching *-{NNN}-*{suffix} in dir_path.
 
+    The inner `*` absorbs an optional `<slug>-` segment, so both flat
+    (`YYYYMMDD-NNN-session-notes.md`) and stream-claimed
+    (`YYYYMMDD-NNN-<slug>-session-notes.md`) names are matched.
     Sorts by filename (filenames begin with YYYYMMDD, so lexical sort is
     chronological). Returns None if dir missing or no matches.
     """
     if not dir_path.is_dir():
         return None
-    matches = sorted(dir_path.glob(f"*-{prev_num_padded}-{suffix}"))
+    matches = sorted(dir_path.glob(f"*-{prev_num_padded}-*{suffix}"))
     return matches[-1] if matches else None
 
 
@@ -263,6 +240,260 @@ def update_index(index_path: Path, new_num: int, entry: str) -> None:
     index_path.write_text(content, encoding="utf-8")
 
 
+def max_numbered_file(directory: Path, suffix: str) -> int:
+    """Find the highest NNN in filenames matching YYYYMMDD-NNN-<suffix> in directory.
+
+    Returns 0 if no matches.
+    """
+    if not directory.is_dir():
+        return 0
+    pattern = re.compile(rf"^\d{{8}}-(\d{{3}})(?:-[^/]+)?-{re.escape(suffix)}$")
+    best = 0
+    for p in directory.iterdir():
+        m = pattern.match(p.name)
+        if m:
+            best = max(best, int(m.group(1)))
+    return best
+
+
+def max_transcript_number(transcripts_dir: Path) -> int:
+    """Find the highest NNN in transcript filenames (YYYYMMDD-NNN-<title>.json).
+
+    Ignores legacy transcripts without NNN. Returns 0 if no matches.
+    """
+    if not transcripts_dir.is_dir():
+        return 0
+    pattern = re.compile(r"^\d{8}-(\d{3})-[^/]+\.json$")
+    best = 0
+    for p in transcripts_dir.iterdir():
+        m = pattern.match(p.name)
+        if m:
+            best = max(best, int(m.group(1)))
+    return best
+
+
+def next_session_number(archive_dir: Path) -> int:
+    """Compute the next session number from four sources, taking the max.
+
+    Source 1: _index.md's `**Current**: N` (today's behavior + 1)
+    Source 2: highest NNN in session-notes/ (+ 1)
+    Source 3: highest NNN in session-handoff/ (+ 1)
+    Source 4: highest NNN in transcripts/ (+ 1)
+
+    Closes the May-3 collision-bug pattern where _index.md drifts behind
+    the filesystem.
+    """
+    index_path = archive_dir / "transcripts" / "_index.md"
+    try:
+        idx_current = get_current_number(index_path)
+    except (FileNotFoundError, ValueError):
+        idx_current = 0
+
+    candidates = [
+        idx_current + 1,
+        max_numbered_file(archive_dir / "session-notes", "session-notes.md") + 1,
+        max_numbered_file(archive_dir / "session-handoff", "session-handoff.md") + 1,
+        max_transcript_number(archive_dir / "transcripts") + 1,
+    ]
+    return max(candidates)
+
+
+def ensure_streams_section(todos_path: Path, today: str) -> None:
+    """If the file is missing or has no ## Streams section, seed it with a
+    `main` stream. Idempotent — no-op if the section already exists."""
+    if not todos_path.exists():
+        todos_path.write_text(
+            "# Current TODOs\n\n"
+            "## Streams\n\n"
+            + _reg.render_table([_reg.Stream(
+                slug="main", name="Main", status="active",
+                last_touched=today,
+            )]) + "\n\n"
+            "<!-- Add streams with: /llm-dev:stream new <slug> \"<name>\" -->\n\n"
+            "## Stream: main\n\n"
+            "_(work here; add per-stream prose as it accumulates)_\n"
+        )
+        return
+    r = _reg.parse(todos_path.read_text())
+    if r.has_streams_section:
+        return
+    # has_streams_section remains False — update_table_in_text will append
+    # the heading + table block automatically.
+    r.streams = [_reg.Stream(slug="main", name="Main", status="active",
+                             last_touched=today)]
+    _reg.optimistic_write(todos_path, r)
+
+
+def _derive_next_action_preview(handoff_path_str: str | None,
+                                 project_root: Path) -> str:
+    """Read the linked handoff and extract the first sentence of the
+    'First Action for Next Session' section. Returns '(no prior handoff yet)'
+    if the file doesn't exist or the section isn't found."""
+    if not handoff_path_str:
+        return "(no prior handoff yet)"
+    p = project_root / handoff_path_str
+    if not p.exists():
+        return "(no prior handoff yet)"
+    text = p.read_text(encoding="utf-8")
+    m = re.search(r"##?\s*First Action for Next Session\s*\n+(.+?)(?:\n\n|\Z)",
+                  text, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return "(no First Action section in handoff)"
+    first = m.group(1).strip().split(".")[0].strip()
+    return (first[:120] + "…") if len(first) > 120 else first
+
+
+def pick_stream_interactively(todos_path: Path) -> str | None:
+    """Print the registry and prompt the user. Returns selected slug or None
+    on skip. Default-selection rules per the design spec:
+    - exactly one `active` stream → Enter selects it
+    - 0 or 2+ active streams → no default, user must type a choice
+    """
+    r = _reg.parse(todos_path.read_text())
+    active = [s for s in r.streams if s.status == "active"]
+    visible = [s for s in r.streams if s.status != "archived"]
+
+    project_root = todos_path.parent
+    print("\nStreams in this project:")
+    default_idx: int | None = None
+    if len(active) == 1:
+        default_idx = visible.index(active[0]) + 1
+
+    for i, s in enumerate(visible, start=1):
+        marker = " (default)" if default_idx == i else ""
+        claim_disp = "unclaimed" if s.claim is None else f"CLAIMED by {s.claim[:8]}…"
+        preview = _derive_next_action_preview(s.last_handoff, project_root)
+        print(f"  {i}. {s.slug:20s} {s.status:8s} {claim_disp}")
+        print(f"     → {preview}{marker}")
+
+    suffix = f" [default: {default_idx}]" if default_idx else ""
+    prompt = f"\nWhich stream? [1-{len(visible)}, 'new <slug>', or 's' to skip]{suffix}: "
+    try:
+        raw = input(prompt).strip()
+    except EOFError:
+        raw = ""
+
+    if raw == "" and default_idx is not None:
+        return visible[default_idx - 1].slug
+    if raw.lower() == "s":
+        return None
+    if raw.startswith("new "):
+        slug = raw[4:].strip()
+        if not re.match(r"^[a-z0-9][a-z0-9-]*$", slug):
+            print(f"Invalid slug {slug!r}: must be kebab-case (a-z, 0-9, -).")
+            return pick_stream_interactively(todos_path)
+        try:
+            _reg.add_stream(todos_path, slug=slug, name=slug.replace("-", " ").title(),
+                            now_date=datetime.now().strftime("%Y-%m-%d"))
+            return slug
+        except _reg.RegistryError as e:
+            print(f"Could not create stream: {e}")
+            return pick_stream_interactively(todos_path)
+    if raw.isdigit() and 1 <= int(raw) <= len(visible):
+        return visible[int(raw) - 1].slug
+    print(f"Unrecognized input: {raw!r}")
+    return pick_stream_interactively(todos_path)
+
+
+def rename_notes_for_claim(notes_path: Path | None, slug: str) -> Path | None:
+    """Rename an in-flight session-notes file to include the stream slug.
+
+    Called from init-session main() after a successful claim. The notes file
+    was created with the flat name YYYYMMDD-NNN-session-notes.md before the
+    claim was processed; this renames it to YYYYMMDD-NNN-<slug>-session-notes.md
+    so end-session can find it via build_session_doc_filename.
+
+    Returns the new path (or the original path if no rename happened).
+    """
+    if notes_path is None:
+        return None
+    expected_suffix = "-session-notes.md"
+    if not notes_path.name.endswith(expected_suffix):
+        return notes_path
+    stem = notes_path.name[:-len(expected_suffix)]
+    # If the slug is already in the name, no-op
+    if stem.endswith(f"-{slug}"):
+        return notes_path
+    new_name = f"{stem}-{slug}-session-notes.md"
+    new_path = notes_path.parent / new_name
+    if notes_path.exists() and not new_path.exists():
+        notes_path.rename(new_path)
+        return new_path
+    return notes_path
+
+
+def attempt_claim(todos_path: Path, slug: str, session_id: str, now_iso: str,
+                  force: bool) -> bool:
+    """Try to claim `slug`. If already claimed by another session, surface
+    evidence and prompt the user to confirm reclaim. Returns True on
+    successful claim, False if the user declined or the claim couldn't be
+    made."""
+    result = _reg.claim(todos_path, slug=slug, session_id=session_id,
+                        now_iso=now_iso, force=False)
+    if result.claimed:
+        return True
+
+    # Contention path
+    r = _reg.parse(todos_path.read_text())
+    stream = r.get(slug)
+    holder = result.previous_holder or "unknown"
+    title = _lookup_session_title(holder)
+    notes_path = _lookup_notes_file_for_holder(todos_path.parent, slug, holder)
+
+    print()
+    print(f"WARNING: Stream `{slug}` is claimed by:")
+    print(f"    Session ID:  {holder}")
+    print(f"    Title:       {title or '(no /rename event found)'}")
+    print(f"    Claimed at:  {stream.since}")
+    if notes_path:
+        print(f"    Notes:       {notes_path}")
+        try:
+            mtime = notes_path.stat().st_mtime
+            from datetime import datetime as _dt
+            print(f"    Last edited: {_dt.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')}")
+        except OSError:
+            pass
+    print()
+    print("Inspect the notes and the Claude Code session title before reclaiming.")
+    print("Conventions: `open-` prefix → prior session hasn't run /end-session.")
+    print("             `closed-` prefix → prior session ended cleanly; if you see")
+    print("             `closed-` here, the registry is out of sync — reclaim flags it.")
+    print()
+    try:
+        ans = input("Reclaim? [y/N]: ").strip().lower()
+    except EOFError:
+        ans = "n"
+    if ans != "y":
+        return False
+    result = _reg.claim(todos_path, slug=slug, session_id=session_id,
+                        now_iso=now_iso, force=True)
+    return result.claimed
+
+
+def _lookup_session_title(session_id: str) -> str | None:
+    """Best-effort title lookup. Searches ~/.claude/projects/*/<id>.jsonl."""
+    if session_id == "unknown":
+        return None
+    p = _session.PROJECTS_DIR
+    if not p.exists():
+        return None
+    for jsonl in p.rglob(f"{session_id}.jsonl"):
+        return _session.find_session_title(jsonl)
+    return None
+
+
+def _lookup_notes_file_for_holder(project_root: Path, slug: str,
+                                  holder: str) -> Path | None:
+    """Find the in-flight session-notes file for the holder of `slug`."""
+    notes_dir = project_root / ".archive" / "session-notes"
+    if not notes_dir.exists():
+        return None
+    # Slug-bearing files first
+    for p in sorted(notes_dir.glob(f"*-{slug}-session-notes.md"), reverse=True):
+        return p
+    return None
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
@@ -283,6 +514,10 @@ def main():
         action="store_true",
         help="Show what would be done without making changes"
     )
+    parser.add_argument("--stream", default=None,
+                        help="Claim this stream non-interactively")
+    parser.add_argument("--no-stream", action="store_true",
+                        help="Start a free session without prompting")
 
     args = parser.parse_args()
 
@@ -295,15 +530,14 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    # Get current conversation number
+    # Get current conversation number and compute next via cross-check
     try:
         current_num = get_current_number(index_path)
+        archive_dir = index_path.parent.parent
+        new_num = next_session_number(archive_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-    # Calculate new number
-    new_num = current_num + 1
     new_num_padded = f"{new_num:03d}"
 
     # Format dates
@@ -318,7 +552,10 @@ def main():
     model_display = get_model_display_name(args.model)
 
     # Get session ID
-    session_id = find_session_id()
+    session_id = _session.find_session_id()
+    if session_id == "unknown":
+        import os as _os
+        session_id = f"claude-{new_num_padded}-{_os.urandom(3).hex()}"
 
     # Create placeholder entry
     entry = create_placeholder_entry(
@@ -338,7 +575,6 @@ def main():
     notes_path_preview = notes_dir_preview / f"{date_yyyymmdd}-{new_num_padded}-session-notes.md"
 
     # Resolve prior-session context for the next session to load
-    archive_dir = index_path.parent.parent
     prev_num = current_num
     prev_num_padded = f"{prev_num:03d}"
     if prev_num > 0:
@@ -392,6 +628,36 @@ def main():
     except Exception as e:
         print(f"Warning: failed to create session notes file: {e}", file=sys.stderr)
         notes_path = None
+
+    # Stream selection
+    todos_path = archive_dir.parent / "CURRENT-TODOs.md"
+    ensure_streams_section(todos_path, today=now.strftime("%Y-%m-%d"))
+
+    selected_slug: str | None = None
+    if args.no_stream:
+        selected_slug = None
+    elif args.stream:
+        if not attempt_claim(todos_path, slug=args.stream, session_id=session_id,
+                             now_iso=datetime.now().strftime("%Y-%m-%dT%H:%MZ"),
+                             force=False):
+            print(f"\nAborted: could not claim stream `{args.stream}`.")
+            return 1
+        selected_slug = args.stream
+    else:
+        selected_slug = pick_stream_interactively(todos_path)
+        if selected_slug:
+            if not attempt_claim(todos_path, slug=selected_slug, session_id=session_id,
+                                 now_iso=datetime.now().strftime("%Y-%m-%dT%H:%MZ"),
+                                 force=False):
+                print(f"\nAborted: could not claim stream `{selected_slug}`.")
+                return 1
+
+    if selected_slug:
+        notes_path = rename_notes_for_claim(notes_path, selected_slug)
+        print(f"Claimed stream: {selected_slug}")
+    else:
+        print("Starting session with no stream. Run /llm-dev:stream join <slug> "
+              "to attach later.")
 
     print()
     print(f"Session {new_num_padded} initialized successfully!")

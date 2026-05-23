@@ -39,6 +39,23 @@ order:**
 If no prior session exists (this is session 001), the handler will say so
 and you can proceed normally.
 
+## Stream Selection
+
+When `/llm-dev:init-session` runs, the handler offers stream selection:
+
+- **No arg** (interactive): print the registry and prompt to pick. When
+  exactly one `active` stream exists, pressing Enter selects it.
+- `--stream <slug>`: claim that stream non-interactively. If already
+  claimed by another session, surfaces a contention warning with the
+  holder's session ID, title, and notes file; asks to confirm reclaim.
+- `--no-stream`: start a free session without prompting.
+
+The selected stream determines:
+- Which prior handoff is loaded as resume context.
+- Whether the session-notes/handoff/transcript filenames include the
+  stream slug.
+- Whether `/end-session` updates the stream's registry row.
+
 ## Session Notes (Living Document)
 
 Throughout the conversation, periodically update the new session's notes
@@ -68,6 +85,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py $ARGUMENTS
 
 - `--model MODEL` - LLM model identifier (default: claude-sonnet-4-6)
 - `--user USERNAME` - GitHub username for transcript attribution (default: prompts user)
+- `--stream <slug>` - Claim a specific stream non-interactively
+- `--no-stream` - Start a free session without stream selection
 - `--dry-run` - Show what would be done without modifying files
 
 ## After Running
