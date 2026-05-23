@@ -82,6 +82,19 @@ next session, then archive this conversation as a JSON transcript.
 > **Length:** roughly 1–2 screens of markdown. Longer means you're keeping
 > noise; much shorter means you're leaving threads dangling.
 
+## Stream Behavior
+
+If the session held a stream claim at end time:
+- Handoff and transcript filenames include the stream slug.
+- The stream's registry row is updated: `Claim` → `unclaimed`,
+  `Since` → `—`, `Last Touched` → now, `Last Handoff` → new path.
+- If another session reclaimed the stream mid-flow, the handoff body is
+  prepended with a "claim was reassigned" note and the registry row is
+  not modified.
+
+If the session was free, today's behavior is preserved: flat filenames
+and no registry interaction.
+
 ## What the Handler Does Automatically
 
 1. **Finds session ID** — From index placeholder (set by `/init-session`) or most recent JSONL
@@ -96,6 +109,7 @@ next session, then archive this conversation as a JSON transcript.
 
 - `conversation-number` — The session number (from `/init-session`)
 - `title` — Brief title, 3-7 words (e.g., "Plugin Development and Testing")
+- `--stream <slug>` — Override stream slug for this session. By default, end-session looks up which stream (if any) is claimed by this session's ID in CURRENT-TODOs.md; pass `--stream` only to force a specific slug or override.
 - `--topics "t1, t2"` — Optional comma-separated topics (auto-generated if omitted)
 - `--sanitize` — Automatically redact PII (home paths, participant names) without prompting
 - `--dry-run` — Preview without writing files

@@ -24,6 +24,8 @@ Examples:
         --next-steps "Implement context propagation fix, Add SAC agent"
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -34,6 +36,60 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).parent))
+import _registry as _reg
+
+
+def build_transcript_filename(yyyymmdd: str, nnn: str, title_kebab: str,
+                              stream_slug: str | None) -> str:
+    """Construct the transcript JSON filename.
+
+    Claimed: YYYYMMDD-NNN-<slug>-<title>.json
+    Free:    YYYYMMDD-NNN-<title>.json
+    """
+    if stream_slug:
+        return f"{yyyymmdd}-{nnn}-{stream_slug}-{title_kebab}.json"
+    return f"{yyyymmdd}-{nnn}-{title_kebab}.json"
+
+
+def build_session_doc_filename(yyyymmdd: str, nnn: str, suffix: str,
+                               stream_slug: str | None) -> str:
+    """Construct session-notes or session-handoff filename.
+
+    suffix is the trailing part after the date+NNN: 'session-notes.md' or
+    'session-handoff.md'.
+    """
+    if stream_slug:
+        return f"{yyyymmdd}-{nnn}-{stream_slug}-{suffix}"
+    return f"{yyyymmdd}-{nnn}-{suffix}"
+
+
+def release_claim_for_session(todos_path: Path, slug: str, session_id: str,
+                              new_handoff: str, now_date: str):
+    """Release `slug` if held by `session_id`. Returns the release result;
+    if stolen, the registry is left untouched."""
+    if not todos_path.exists():
+        return _reg.ReleaseResult(released=True)
+    return _reg.release(todos_path, slug=slug, session_id=session_id,
+                        new_handoff=new_handoff, now_date=now_date)
+
+
+def prepend_stolen_note(handoff_body: str, slug: str, actual_holder: str,
+                       since: str) -> str:
+    """Prepend a 'claim was reassigned' admonition to the handoff body."""
+    note = (
+        f"> **Note**: this session's claim on `{slug}` was reassigned "
+        f"mid-flow. The current stream owner is `{actual_holder}` "
+        f"as of {since}.\n\n"
+    )
+    return note + handoff_body
+
+
+def since_lookup_from_registry(todos_path: Path, slug: str) -> str:
+    r = _reg.parse(todos_path.read_text())
+    s = r.get(slug)
+    return s.since if s and s.since else "unknown"
 
 
 class Version:
@@ -71,7 +127,7 @@ class Version:
 class TranscriptGenerator:
     """Generates structured JSON transcripts from Claude Code JSONL sessions."""
 
-    def __init__(self, session_num: int, title: str, **kwargs):
+    def __init__(self, session_num: int, title: str, stream_slug: str | None = None, **kwargs):
         self.session_num = session_num
         self.title = title
         self.session_id = kwargs.get('session_id')
@@ -126,8 +182,26 @@ class TranscriptGenerator:
         self.date_changelog = now.strftime("%Y-%m-%d")
 
         self.title_kebab = self._to_kebab_case(title)
-        self.conversation_id = f"{self.date_yyyymmdd}-{self.title_kebab}"
-        self.output_file = self.archive_dir / "transcripts" / f"{self.conversation_id}.json"
+        self.stream_slug = stream_slug  # None when this session held no claim
+
+        # If --stream wasn't passed, look up whether this session holds any claim
+        if not self.stream_slug:
+            todos_path = self.archive_dir.parent / "CURRENT-TODOs.md"
+            if todos_path.exists():
+                try:
+                    registry = _reg.parse(todos_path.read_text())
+                    held = next((s for s in registry.streams if s.claim == self.session_id), None)
+                    if held is not None:
+                        self.stream_slug = held.slug
+                except _reg.RegistryError:
+                    pass  # malformed registry — proceed as free
+
+        transcript_filename = build_transcript_filename(
+            self.date_yyyymmdd, self.session_num_padded,
+            self.title_kebab, self.stream_slug,
+        )
+        self.conversation_id = transcript_filename[:-len(".json")]
+        self.output_file = self.archive_dir / "transcripts" / transcript_filename
 
         # Get user info
         self.user_name = self._get_user_name()
@@ -895,7 +969,8 @@ class TranscriptGenerator:
             session_notes_path = (
                 self.archive_dir
                 / "session-notes"
-                / f"{self.date_yyyymmdd}-{self.session_num_padded}-session-notes.md"
+                / build_session_doc_filename(self.date_yyyymmdd, self.session_num_padded,
+                                             "session-notes.md", self.stream_slug)
             )
             if session_notes_path.exists():
                 files_to_commit.append(
@@ -908,7 +983,8 @@ class TranscriptGenerator:
             session_handoff_path = (
                 self.archive_dir
                 / "session-handoff"
-                / f"{self.date_yyyymmdd}-{self.session_num_padded}-session-handoff.md"
+                / build_session_doc_filename(self.date_yyyymmdd, self.session_num_padded,
+                                             "session-handoff.md", self.stream_slug)
             )
             if session_handoff_path.exists():
                 files_to_commit.append(
@@ -921,6 +997,40 @@ class TranscriptGenerator:
                     f"the next session will have no re-entry point.",
                     file=sys.stderr,
                 )
+
+            if self.stream_slug:
+                todos_path = self.archive_dir.parent / "CURRENT-TODOs.md"
+                if todos_path.exists():
+                    handoff_rel = session_handoff_path.relative_to(self.archive_dir.parent)
+                    result = release_claim_for_session(
+                        todos_path=todos_path,
+                        slug=self.stream_slug,
+                        session_id=self.session_id,
+                        new_handoff=str(handoff_rel),
+                        now_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    )
+                    # Stage CURRENT-TODOs.md whenever release wrote to it.
+                    # Stolen claims leave the file untouched, so skip in that case.
+                    if not result.stolen:
+                        files_to_commit.append(
+                            str(todos_path.relative_to(self.project_dir))
+                        )
+                    if result.stolen and session_handoff_path.exists():
+                        body = session_handoff_path.read_text(encoding="utf-8")
+                        session_handoff_path.write_text(
+                            prepend_stolen_note(
+                                body, slug=self.stream_slug,
+                                actual_holder=result.actual_holder,
+                                since=since_lookup_from_registry(todos_path, self.stream_slug),
+                            ),
+                            encoding="utf-8",
+                        )
+                        print(f"WARNING: Stream `{self.stream_slug}` was reassigned to "
+                              f"{result.actual_holder}; handoff prepended with note.")
+                    elif result.stolen:
+                        print(f"WARNING: Stream `{self.stream_slug}` was reassigned to "
+                              f"{result.actual_holder}, but no handoff file exists to annotate.",
+                              file=sys.stderr)
 
             # Build commit message with date
             commit_message = f"Add transcript for session {self.date_display}"
@@ -1123,6 +1233,11 @@ Examples:
         type=str,
         help='Comma-separated list of next steps (e.g., "step1, step2")'
     )
+    parser.add_argument(
+        '--stream',
+        default=None,
+        help='Stream slug this session belongs to (default: free)'
+    )
 
     args = parser.parse_args()
 
@@ -1137,6 +1252,7 @@ Examples:
         generator = TranscriptGenerator(
             session_num=args.session_num,
             title=args.title,
+            stream_slug=args.stream,
             session_id=args.session_id,
             topics=args.topics,
             dry_run=args.dry_run,

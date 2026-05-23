@@ -10,6 +10,7 @@ These must be replaced for every new project:
 |-------------|-------------|---------|
 | `{{PROJECT_NAME}}` | Project name (kebab-case recommended) | `my-awesome-project` |
 | `{{PROJECT_DESCRIPTION}}` | Brief project description (1-2 sentences) | `A CLI tool for managing development workflows` |
+| `{{TODAY_YYYY_MM_DD}}` | Today's date in YYYY-MM-DD | `2026-05-18` |
 
 ## Workspace Placeholders
 
