@@ -1,0 +1,98 @@
+"""Claude Code session helpers — shared by init-session, end-session, stream."""
+from __future__ import annotations
+
+import json
+import re
+import time
+from pathlib import Path
+from typing import Optional
+
+
+PROJECTS_DIR = Path.home() / ".claude" / "projects"
+RECENT_WINDOW_SECONDS = 300  # files modified within last 5 min are "ours"
+RENAME_RE = re.compile(r'named this session "([^"]+)"')
+
+
+def find_session_id() -> str:
+    """Return the current Claude Code session UUID, or 'unknown'.
+
+    Looks in ~/.claude/projects/ for the most recently modified *.jsonl,
+    excluding agent-* files. Only considers files modified in the last 5
+    minutes (anything older is presumably a prior session).
+    """
+    if not PROJECTS_DIR.exists():
+        return "unknown"
+
+    threshold = time.time() - RECENT_WINDOW_SECONDS
+    candidates = []
+    try:
+        # Search recursively so per-cwd subdirs are covered
+        for jsonl in PROJECTS_DIR.rglob("*.jsonl"):
+            if jsonl.name.startswith("agent-"):
+                continue
+            try:
+                if jsonl.stat().st_mtime >= threshold:
+                    candidates.append(jsonl)
+            except OSError:
+                continue
+    except OSError:
+        return "unknown"
+
+    if not candidates:
+        return "unknown"
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+    return latest.stem
+
+
+def find_session_title(jsonl_path: Path) -> Optional[str]:
+    """Extract the most recent /rename title from a Claude Code session JSONL.
+
+    Returns the latest title (sessions can be renamed multiple times), or
+    None if the file has no rename events.
+    """
+    if not jsonl_path.exists():
+        return None
+    latest_title: Optional[str] = None
+    try:
+        with jsonl_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if "named this session" not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg = d.get("message", {})
+                content = msg.get("content", "")
+                texts = []
+                if isinstance(content, str):
+                    texts.append(content)
+                elif isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            texts.append(c.get("text", ""))
+                for t in texts:
+                    m = RENAME_RE.search(t)
+                    if m:
+                        latest_title = m.group(1)
+    except OSError:
+        return None
+    return latest_title
+
+
+def find_session_jsonl(session_id: str, cwd: Path) -> Optional[Path]:
+    """Locate the JSONL file for a given session ID under the encoded-cwd dir.
+
+    Claude Code stores per-project sessions in ~/.claude/projects/<encoded-cwd>/.
+    The encoded form replaces slashes with hyphens and prepends a hyphen.
+    """
+    if not PROJECTS_DIR.exists():
+        return None
+    encoded = "-" + str(cwd.resolve()).replace("/", "-")
+    candidate = PROJECTS_DIR / encoded / f"{session_id}.jsonl"
+    if candidate.exists():
+        return candidate
+    # Fallback: search anywhere
+    for jsonl in PROJECTS_DIR.rglob(f"{session_id}.jsonl"):
+        return jsonl
+    return None

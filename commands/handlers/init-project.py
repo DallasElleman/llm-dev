@@ -212,6 +212,7 @@ def phase4_replace_placeholders(info: dict, dry_run: bool) -> None:
     replacements = {
         '{{PROJECT_NAME}}': info['project_name'],
         '{{PROJECT_DESCRIPTION}}': info['description'],
+        '{{TODAY_YYYY_MM_DD}}': datetime.now().strftime('%Y-%m-%d'),
     }
 
     if info['workspace_path']:
