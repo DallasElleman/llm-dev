@@ -176,14 +176,17 @@ def find_latest_transcript(index_path: Path, prev_num_padded: str) -> Path | Non
 def find_latest_in_dir(
     dir_path: Path, prev_num_padded: str, suffix: str
 ) -> Path | None:
-    """Find the most recent file matching *-{NNN}-{suffix} in dir_path.
+    """Find the most recent file matching *-{NNN}-*{suffix} in dir_path.
 
+    The inner `*` absorbs an optional `<slug>-` segment, so both flat
+    (`YYYYMMDD-NNN-session-notes.md`) and stream-claimed
+    (`YYYYMMDD-NNN-<slug>-session-notes.md`) names are matched.
     Sorts by filename (filenames begin with YYYYMMDD, so lexical sort is
     chronological). Returns None if dir missing or no matches.
     """
     if not dir_path.is_dir():
         return None
-    matches = sorted(dir_path.glob(f"*-{prev_num_padded}-{suffix}"))
+    matches = sorted(dir_path.glob(f"*-{prev_num_padded}-*{suffix}"))
     return matches[-1] if matches else None
 
 
