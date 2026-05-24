@@ -208,17 +208,25 @@ def migrate_index(index_path: Path) -> bool:
 
     content = index_path.read_text(encoding="utf-8")
 
-    # Split on ## headings, preserving delimiters
-    parts = re.split(r'(?m)^(## .+)$', content)
-    if len(parts) < 3:
-        return False  # No ## sections found
+    # Split at each ## heading boundary using a lookahead so the delimiter
+    # character (the ## itself) stays with its section.  This keeps each
+    # section self-contained (heading + body in one chunk) and avoids the
+    # boundary ambiguity of the old capturing-group split where the last
+    # index entry could be dropped when it directly abutted the next section
+    # with no intervening blank line.
+    raw_parts = re.split(r'(?m)^(?=## )', content)
+    preamble = raw_parts[0]
 
-    preamble = parts[0]
     sections: list[tuple[str, str]] = []
-    for i in range(1, len(parts), 2):
-        heading = parts[i]
-        body = parts[i + 1] if i + 1 < len(parts) else ""
-        sections.append((heading, body))
+    for part in raw_parts[1:]:
+        nl = part.find('\n')
+        if nl == -1:
+            sections.append((part, ""))
+        else:
+            sections.append((part[:nl], part[nl:]))
+
+    if len(sections) < 2:
+        return False  # No ## sections found
 
     index_keywords = {"transcript index", "conversation index"}
     index_pos = next(
