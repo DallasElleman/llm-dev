@@ -1,11 +1,8 @@
 """Claude Code session helpers — shared by init-session, end-session, stream."""
-from __future__ import annotations
-
 import json
 import re
 import time
 from pathlib import Path
-from typing import Optional
 
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -44,7 +41,7 @@ def find_session_id() -> str:
     return latest.stem
 
 
-def find_session_title(jsonl_path: Path) -> Optional[str]:
+def find_session_title(jsonl_path: Path) -> str | None:
     """Extract the most recent /rename title from a Claude Code session JSONL.
 
     Returns the latest title (sessions can be renamed multiple times), or
@@ -52,7 +49,7 @@ def find_session_title(jsonl_path: Path) -> Optional[str]:
     """
     if not jsonl_path.exists():
         return None
-    latest_title: Optional[str] = None
+    latest_title: str | None = None
     try:
         with jsonl_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -80,7 +77,7 @@ def find_session_title(jsonl_path: Path) -> Optional[str]:
     return latest_title
 
 
-def find_session_jsonl(session_id: str, cwd: Path) -> Optional[Path]:
+def find_session_jsonl(session_id: str, cwd: Path) -> Path | None:
     """Locate the JSONL file for a given session ID under the encoded-cwd dir.
 
     Claude Code stores per-project sessions in ~/.claude/projects/<encoded-cwd>/.

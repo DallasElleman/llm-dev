@@ -9,14 +9,11 @@ This module is pure data manipulation: it parses markdown text into typed
 objects and serializes typed objects back to markdown. File I/O and atomic
 write semantics live in callers (see optimistic_write in same module).
 """
-from __future__ import annotations
-
 import hashlib
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
 
 
 VALID_STATUSES = ("active", "paused", "archived")
@@ -36,30 +33,30 @@ class Stream:
     slug: str
     name: str
     status: str
-    claim: Optional[str] = None             # session UUID or None when unclaimed
-    since: Optional[str] = None             # ISO-8601 string or None
+    claim: str | None = None             # session UUID or None when unclaimed
+    since: str | None = None             # ISO-8601 string or None
     last_touched: str = ""                  # YYYY-MM-DD or YYYY-MM-DD HH:MM
-    last_handoff: Optional[str] = None      # project-relative path or None
+    last_handoff: str | None = None      # project-relative path or None
 
 
 @dataclass
 class Registry:
     has_streams_section: bool = False
-    streams: List[Stream] = field(default_factory=list)
+    streams: list[Stream] = field(default_factory=list)
     # Byte offsets of the streams table block (for surgical rewrites).
     # Defined when has_streams_section is True.
     table_start: int = -1
     table_end: int = -1
     source: str = ""
 
-    def get(self, slug: str) -> Optional[Stream]:
+    def get(self, slug: str) -> Stream | None:
         for s in self.streams:
             if s.slug == slug:
                 return s
         return None
 
 
-def _parse_cell(cell: str) -> Optional[str]:
+def _parse_cell(cell: str) -> str | None:
     """Convert a table cell to its logical value: '—' or empty → None."""
     v = cell.strip()
     if v in ("", "—", "-", "unclaimed"):
@@ -121,7 +118,7 @@ def parse(text: str) -> Registry:
             f"  Got:      {tuple(header_cells)}"
         )
 
-    streams: List[Stream] = []
+    streams: list[Stream] = []
     seen_slugs = set()
     for row_idx, row in enumerate(table_lines[2:], start=3):  # skip header + separator
         cells = [c.strip() for c in row.strip("|").split("|")]
@@ -156,7 +153,7 @@ def parse(text: str) -> Registry:
     )
 
 
-def render_table(streams: List[Stream]) -> str:
+def render_table(streams: list[Stream]) -> str:
     """Render a list of Stream objects as the markdown table block.
 
     Output includes the header row and separator. Caller is responsible
@@ -226,14 +223,14 @@ def optimistic_write(target: Path, registry: Registry) -> None:
 @dataclass
 class ClaimResult:
     claimed: bool
-    previous_holder: Optional[str] = None
+    previous_holder: str | None = None
 
 
 @dataclass
 class ReleaseResult:
     released: bool
     stolen: bool = False
-    actual_holder: Optional[str] = None
+    actual_holder: str | None = None
 
 
 def claim(target: Path, slug: str, session_id: str, now_iso: str,
@@ -256,7 +253,7 @@ def claim(target: Path, slug: str, session_id: str, now_iso: str,
     return ClaimResult(claimed=True, previous_holder=previous)
 
 
-def release(target: Path, slug: str, session_id: str, new_handoff: Optional[str],
+def release(target: Path, slug: str, session_id: str, new_handoff: str | None,
             now_date: str) -> ReleaseResult:
     """Release `slug` if held by `session_id`. Updates last_handoff/last_touched.
 

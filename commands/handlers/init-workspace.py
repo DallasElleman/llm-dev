@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -132,28 +133,98 @@ def phase2_locate_template(plugin_root: Path) -> Path:
     return template_path
 
 
+def _strip_trailing_blank(lines: list) -> list:
+    """Return copy of lines with trailing blank lines removed."""
+    lines = list(lines)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
+def _make_minimal_streams_block(today: str) -> list:
+    """Return lines for a minimal ## Streams section."""
+    return [
+        '## Streams',
+        '',
+        '| Slug | Name | Status | Claim | Since | Last Touched | Last Handoff |',
+        '|------|------|--------|-------|-------|--------------|--------------|',
+        f'| main | Main | active | unclaimed | — | {today} | |',
+        '',
+        '<!-- Add streams with: /llm-dev:stream new <slug> "<name>" -->',
+    ]
+
+
+def _migrate_streams_to_top(content: str, today: str) -> tuple:
+    """Ensure ## Streams is the first ## section in the document.
+
+    Idempotent: second call on already-migrated content returns (content, False).
+    If no ## Streams section exists, synthesizes a minimal one.
+    Returns (new_content, was_changed).
+    """
+    lines = content.splitlines()
+    h2_pos = [i for i, ln in enumerate(lines) if re.match(r'^## ', ln)]
+
+    if not h2_pos:
+        streams_lines = _make_minimal_streams_block(today)
+        new_lines = _strip_trailing_blank(lines) + [''] + streams_lines
+        return '\n'.join(new_lines) + '\n', True
+
+    streams_h2_idx = None
+    for idx, ln_i in enumerate(h2_pos):
+        if lines[ln_i].strip() == '## Streams':
+            streams_h2_idx = idx
+            break
+
+    if streams_h2_idx is None:
+        insert_at = h2_pos[0]
+        header = _strip_trailing_blank(lines[:insert_at])
+        streams_block = _make_minimal_streams_block(today)
+        new_lines = header + [''] + streams_block + [''] + lines[insert_at:]
+        new_lines = _strip_trailing_blank(new_lines)
+        return '\n'.join(new_lines) + '\n', True
+
+    if streams_h2_idx == 0:
+        return content, False
+
+    def get_section(idx):
+        start = h2_pos[idx]
+        end = h2_pos[idx + 1] if idx + 1 < len(h2_pos) else len(lines)
+        return _strip_trailing_blank(lines[start:end])
+
+    header = _strip_trailing_blank(lines[:h2_pos[0]])
+    sections = [get_section(i) for i in range(len(h2_pos))]
+
+    streams_sec = sections.pop(streams_h2_idx)
+    sections.insert(0, streams_sec)
+
+    result = list(header)
+    for sec in sections:
+        result.append('')
+        result.extend(sec)
+
+    result = _strip_trailing_blank(result)
+    new_content = '\n'.join(result) + '\n'
+    return new_content, new_content != content
+
+
 def phase3_create_workspace_structure(info: dict, template_path: Path, dry_run: bool) -> None:
     """Phase 3: Create workspace directory structure"""
     print("=== Phase 3: Create Workspace Structure ===\n")
 
     workspace_path = info['workspace_path']
+    already_exists = workspace_path.exists()
 
-    if workspace_path.exists():
-        print(f"Warning: Directory {workspace_path} already exists", file=sys.stderr)
-        if not dry_run:
-            overwrite = prompt_yes_no("Overwrite existing directory?", default=False)
-            if not overwrite:
-                print("Aborted by user.", file=sys.stderr)
-                sys.exit(1)
+    if already_exists:
+        print(f"Note: Directory {workspace_path} already exists — updating in place\n")
 
     if dry_run:
-        print(f"[DRY RUN] Would create directory: {workspace_path}")
+        action = "Would update" if already_exists else "Would create"
+        print(f"[DRY RUN] {action} directory: {workspace_path}")
         print(f"[DRY RUN] Would copy template from: {template_path}")
     else:
-        # Create workspace directory
         workspace_path.mkdir(parents=True, exist_ok=True)
+        today = datetime.now().strftime('%Y-%m-%d')
 
-        # Copy template contents (excluding .git and .gitmodules-template)
         for item in template_path.iterdir():
             if item.name in ('.git', '.gitmodules-template'):
                 continue
@@ -162,16 +233,32 @@ def phase3_create_workspace_structure(info: dict, template_path: Path, dry_run: 
 
             try:
                 if item.is_dir():
+                    if not dest.exists():
+                        shutil.copytree(item, dest)
+                        print(f"Copied: {item.name}/")
+                    else:
+                        print(f"Skipped: {item.name}/ (already exists)")
+                elif item.name == 'CURRENT-TODOs.md':
                     if dest.exists():
-                        shutil.rmtree(dest)
-                    shutil.copytree(item, dest)
+                        existing = dest.read_text(encoding='utf-8')
+                        new_content, changed = _migrate_streams_to_top(existing, today)
+                        if changed:
+                            dest.write_text(new_content, encoding='utf-8')
+                            print(f"Migrated: {item.name} (## Streams moved to top)")
+                        else:
+                            print(f"Already current: {item.name}")
+                    else:
+                        shutil.copy2(item, dest)
+                        print(f"Copied: {item.name}")
                 else:
-                    shutil.copy2(item, dest)
-                print(f"Copied: {item.name}")
+                    if not dest.exists():
+                        shutil.copy2(item, dest)
+                        print(f"Copied: {item.name}")
+                    else:
+                        print(f"Skipped: {item.name} (already exists)")
             except Exception as e:
-                print(f"Warning: Failed to copy {item.name}: {e}", file=sys.stderr)
+                print(f"Warning: Failed to process {item.name}: {e}", file=sys.stderr)
 
-        # Create .claude directory
         claude_dir = workspace_path / ".claude"
         claude_dir.mkdir(exist_ok=True)
         print(f"Created: .claude/")
@@ -188,6 +275,7 @@ def phase4_replace_placeholders(info: dict, dry_run: bool) -> None:
     replacements = {
         '{{WORKSPACE_NAME}}': info['workspace_name'],
         '{{WORKSPACE_DESCRIPTION}}': info['description'],
+        '{{TODAY_YYYY_MM_DD}}': datetime.now().strftime('%Y-%m-%d'),
     }
 
     if dry_run:
