@@ -1,16 +1,4 @@
 {
   "description": "llm-dev hooks for session initialization and workflow automation",
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 hooks/set-session-title.py"
-          }
-        ]
-      }
-    ]
-  }
+  "hooks": {}
 }
