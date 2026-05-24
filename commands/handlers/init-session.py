@@ -197,53 +197,67 @@ def find_latest_in_dir(
     return matches[-1] if matches else None
 
 
-def update_index(index_path: Path, new_num: int, entry: str) -> None:
-    """Update index with new current number and placeholder entry"""
+def migrate_index(index_path: Path) -> bool:
+    """Move reference sections above Transcript Index if they are currently below it.
+
+    Idempotent — no-op if Transcript Index is already the last ## section.
+    Returns True if the file was modified.
+    """
+    if not index_path.exists():
+        return False
+
     content = index_path.read_text(encoding="utf-8")
 
-    # 1. Update the Current field
+    # Split on ## headings, preserving delimiters
+    parts = re.split(r'(?m)^(## .+)$', content)
+    if len(parts) < 3:
+        return False  # No ## sections found
+
+    preamble = parts[0]
+    sections: list[tuple[str, str]] = []
+    for i in range(1, len(parts), 2):
+        heading = parts[i]
+        body = parts[i + 1] if i + 1 < len(parts) else ""
+        sections.append((heading, body))
+
+    index_keywords = {"transcript index", "conversation index"}
+    index_pos = next(
+        (i for i, (h, _) in enumerate(sections)
+         if h.lstrip("# ").lower() in index_keywords),
+        None,
+    )
+
+    if index_pos is None or index_pos == len(sections) - 1:
+        return False  # No index section, or already last
+
+    index_section = sections.pop(index_pos)
+    sections.append(index_section)
+
+    new_content = preamble + "".join(h + b for h, b in sections)
+    if new_content == content:
+        return False
+
+    index_path.write_text(new_content, encoding="utf-8")
+    return True
+
+
+def update_index(index_path: Path, new_num: int, entry: str) -> None:
+    """Update index with new current number and placeholder entry.
+
+    Transcript Index is the last section; new entries are appended at end-of-file.
+    """
+    content = index_path.read_text(encoding="utf-8")
+
+    # Update the Current field
     content = re.sub(
         r'\*\*Current\*\*:\s*\d+',
         f'**Current**: {new_num}',
         content
     )
 
-    # 2. Find insertion point for new entry
-    # Try different markers in order of preference
-    markers = [
-        r'^## Transcript Format',
-        r'^### Examples and References',
-        r'^## '  # Any ## heading after line 10
-    ]
+    # Append entry at end-of-file (Transcript Index is the last section)
+    content = content.rstrip() + '\n\n' + entry + '\n'
 
-    insertion_line = None
-    lines = content.split('\n')
-
-    for marker in markers:
-        for i, line in enumerate(lines):
-            # Skip first 10 lines for generic ## heading search
-            if marker == r'^## ' and i < 10:
-                continue
-
-            if re.match(marker, line):
-                insertion_line = i
-                break
-
-        if insertion_line is not None:
-            break
-
-    # 3. Insert the entry
-    if insertion_line is not None:
-        # Insert before the marker line with blank lines around entry
-        lines.insert(insertion_line, '')
-        lines.insert(insertion_line, entry)
-        lines.insert(insertion_line, '')
-        content = '\n'.join(lines)
-    else:
-        # No marker found, append to end
-        content = content.rstrip() + '\n\n' + entry + '\n'
-
-    # Write back to file
     index_path.write_text(content, encoding="utf-8")
 
 
@@ -689,6 +703,9 @@ def main():
         print()
         print("[DRY RUN COMPLETE - No changes were made]")
         return 0
+
+    # Migrate index if reference sections are below the Transcript Index
+    migrate_index(index_path)
 
     # Update the index
     try:
