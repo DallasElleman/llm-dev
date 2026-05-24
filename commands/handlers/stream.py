@@ -4,8 +4,6 @@
 Dispatches the subcommand verbs (list, new, join, release, pause, resume,
 archive, rename). Operates on CURRENT-TODOs.md in the current project.
 """
-from __future__ import annotations
-
 import argparse
 import re
 import sys

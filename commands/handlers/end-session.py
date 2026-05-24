@@ -24,8 +24,6 @@ Examples:
         --next-steps "Implement context propagation fix, Add SAC agent"
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
@@ -35,7 +33,6 @@ import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _registry as _reg
@@ -101,7 +98,7 @@ class Version:
         self.patch = patch
 
     @classmethod
-    def parse(cls, version_str: str) -> Optional['Version']:
+    def parse(cls, version_str: str) -> 'Version | None':
         """Parse a semantic version string like '1.2.3'."""
         match = re.match(r'^(\d+)\.(\d+)\.(\d+)$', version_str)
         if not match:
@@ -207,7 +204,7 @@ class TranscriptGenerator:
         self.user_name = self._get_user_name()
         self.user_github = self._get_user_github()
 
-    def _find_archive_dir(self) -> Optional[Path]:
+    def _find_archive_dir(self) -> Path | None:
         """Find .archive/transcripts directory by traversing up from cwd.
 
         Only returns archive directories at or below the current working
@@ -254,7 +251,7 @@ class TranscriptGenerator:
         # Default to 0.1.0 if no version found
         return Version(0, 1, 0)
 
-    def _find_session_id(self) -> Optional[str]:
+    def _find_session_id(self) -> str | None:
         """Find session ID from index placeholder or most recent JSONL."""
         # Try to extract from index placeholder
         if self.index_path.exists():
@@ -273,7 +270,7 @@ class TranscriptGenerator:
         # Fall back to most recent JSONL (non-agent)
         return self._find_most_recent_jsonl()
 
-    def _find_most_recent_jsonl(self) -> Optional[str]:
+    def _find_most_recent_jsonl(self) -> str | None:
         """Find most recent non-agent JSONL file modified in last 60 minutes."""
         claude_projects = Path.home() / ".claude" / "projects"
         if not claude_projects.exists():
@@ -297,7 +294,7 @@ class TranscriptGenerator:
 
         return None
 
-    def _find_jsonl_file(self) -> Optional[Path]:
+    def _find_jsonl_file(self) -> Path | None:
         """Locate session JSONL file in ~/.claude/projects/."""
         claude_projects = Path.home() / ".claude" / "projects"
         if not claude_projects.exists():
@@ -336,7 +333,7 @@ class TranscriptGenerator:
 
         return "User"
 
-    def _get_user_github(self) -> Optional[str]:
+    def _get_user_github(self) -> str | None:
         """Get GitHub username from git config."""
         try:
             import subprocess
@@ -368,13 +365,13 @@ class TranscriptGenerator:
 
         return None
 
-    def _parse_comma_separated(self, value: str) -> List[str]:
+    def _parse_comma_separated(self, value: str) -> list[str]:
         """Parse comma-separated string into list of strings."""
         if not value:
             return []
         return [item.strip() for item in value.split(',') if item.strip()]
 
-    def parse_jsonl(self) -> Dict:
+    def parse_jsonl(self) -> dict:
         """Parse JSONL file to structured JSON transcript format."""
         messages = []
         model_id = None
@@ -506,9 +503,9 @@ class TranscriptGenerator:
         self,
         content,
         tools_used: Counter,
-        files_created: List[Dict],
-        files_modified: List[Dict]
-    ) -> Tuple[str, List[Dict]]:
+        files_created: list[dict],
+        files_modified: list[dict]
+    ) -> tuple[str, list[dict]]:
         """Parse message content and extract tool calls."""
         if isinstance(content, str):
             # Skip command-name tags
@@ -557,7 +554,7 @@ class TranscriptGenerator:
 
         return '', []
 
-    def _format_tool_description(self, tool_name: str, inp: Dict) -> str:
+    def _format_tool_description(self, tool_name: str, inp: dict) -> str:
         """Format tool description based on tool type."""
         if tool_name == 'Read':
             return f"Read {inp.get('file_path', 'file')}"
@@ -583,10 +580,10 @@ class TranscriptGenerator:
 
     def _generate_outcomes(
         self,
-        files_created: List[Dict],
-        files_modified: List[Dict],
-        messages: List[Dict]
-    ) -> List[str]:
+        files_created: list[dict],
+        files_modified: list[dict],
+        messages: list[dict]
+    ) -> list[str]:
         """Auto-generate outcomes based on file operations."""
         outcomes = []
 
@@ -615,7 +612,7 @@ class TranscriptGenerator:
 
         return outcomes
 
-    def _generate_topics(self, tools_used: Counter) -> List[str]:
+    def _generate_topics(self, tools_used: Counter) -> list[str]:
         """Auto-generate topics if not provided."""
         if self.topics:
             return [t.strip() for t in self.topics.split(',')]
@@ -633,7 +630,7 @@ class TranscriptGenerator:
 
         return topics
 
-    def _group_consecutive_tool_calls(self, messages: List[Dict]) -> List[Dict]:
+    def _group_consecutive_tool_calls(self, messages: list[dict]) -> list[dict]:
         """Group consecutive assistant messages that have only tool calls (no text).
 
         When multiple tool calls occur in rapid succession without accompanying
@@ -684,7 +681,7 @@ class TranscriptGenerator:
 
         return grouped
 
-    def write_transcript(self, transcript: Dict, content_override: str = None) -> None:
+    def write_transcript(self, transcript: dict, content_override: str = None) -> None:
         """Write transcript to JSON file.
 
         If content_override is provided (e.g., sanitized content), write that
@@ -697,7 +694,7 @@ class TranscriptGenerator:
             else:
                 json.dump(transcript, f, indent=2, ensure_ascii=False)
 
-    def update_index(self, transcript: Dict) -> None:
+    def update_index(self, transcript: dict) -> None:
         """Update _index.md by replacing placeholder with actual entry."""
         if not self.index_path.exists():
             print(f"Warning: Index not found at {self.index_path}")
@@ -735,7 +732,7 @@ class TranscriptGenerator:
         # Write back
         self.index_path.write_text(new_content, encoding='utf-8')
 
-    def _format_changelog_entry(self, transcript: Dict) -> str:
+    def _format_changelog_entry(self, transcript: dict) -> str:
         """Format changelog entry using proper Types of Changes categories.
 
         Categories: Added, Changed, Deprecated, Removed, Fixed, Security
@@ -813,7 +810,7 @@ class TranscriptGenerator:
 
         return '\n'.join(lines)
 
-    def update_changelog(self, transcript: Dict) -> None:
+    def update_changelog(self, transcript: dict) -> None:
         """Update CHANGELOG.md with new entry at top."""
         changelog_entry = self._format_changelog_entry(transcript)
 
@@ -845,7 +842,7 @@ class TranscriptGenerator:
 """
             self.changelog_path.write_text(changelog_content, encoding='utf-8')
 
-    def _scan_pii(self, content: str) -> List[Dict]:
+    def _scan_pii(self, content: str) -> list[dict]:
         """Scan transcript content for PII patterns.
 
         Returns a list of findings, each with 'type', 'count', and 'example'.
@@ -905,7 +902,7 @@ class TranscriptGenerator:
 
         return findings
 
-    def _sanitize_content(self, content: str, findings: List[Dict]) -> str:
+    def _sanitize_content(self, content: str, findings: list[dict]) -> str:
         """Apply redactions to transcript content based on scan findings."""
         sanitized = content
 
@@ -926,7 +923,7 @@ class TranscriptGenerator:
 
         return sanitized
 
-    def _report_findings(self, findings: List[Dict]) -> None:
+    def _report_findings(self, findings: list[dict]) -> None:
         """Print PII scan results."""
         print(f"\n{'='*50}")
         print(f"PII SCAN: {len(findings)} type(s) of sensitive data found")

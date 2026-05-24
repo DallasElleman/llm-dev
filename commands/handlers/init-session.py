@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """init-session.py - Initialize a new LLM session for transcript tracking
 
 Usage: python init-session.py [--model MODEL] [--user USERNAME] [--dry-run]
@@ -18,17 +17,25 @@ import _registry as _reg
 
 
 def find_transcripts_index(start_dir: Path) -> Path | None:
-    """Search up from current directory to find .archive/transcripts/_index.md"""
+    """Search up from start_dir for .archive/transcripts/_index.md.
+
+    Stops ascending when a CLAUDE.md project-root marker is encountered so a
+    parent workspace's .archive/ is never accidentally selected for an
+    un-initialised child project.
+    """
     current = start_dir.resolve()
 
-    # Search up to root
     while True:
         index_path = current / ".archive" / "transcripts" / "_index.md"
         if index_path.exists():
             return index_path
 
+        # CLAUDE.md marks a project/workspace boundary — don't cross it.
+        if (current / "CLAUDE.md").exists():
+            break
+
         parent = current.parent
-        if parent == current:  # Reached root
+        if parent == current:  # Reached filesystem root
             break
         current = parent
 
@@ -343,15 +350,36 @@ def _derive_next_action_preview(handoff_path_str: str | None,
     return (first[:120] + "…") if len(first) > 120 else first
 
 
+def _stream_selection_needed_json(visible: list) -> str:
+    import json as _json
+    return "STREAM_SELECTION_NEEDED: " + _json.dumps({
+        "streams": [{"slug": s.slug, "name": s.name, "status": s.status,
+                     "claimed": s.claim is not None} for s in visible],
+        "instruction": (
+            "Use --list-streams to get full registry as JSON, present options to "
+            "user, then re-invoke with --stream <slug> or --no-stream"
+        ),
+    })
+
+
 def pick_stream_interactively(todos_path: Path) -> str | None:
     """Print the registry and prompt the user. Returns selected slug or None
     on skip. Default-selection rules per the design spec:
     - exactly one `active` stream → Enter selects it
     - 0 or 2+ active streams → no default, user must type a choice
+
+    In a non-TTY context (e.g. Claude Code Bash tool) this function cannot
+    block on input(). Instead it prints STREAM_SELECTION_NEEDED: JSON and
+    returns None so the caller can surface the choice to the user via Claude.
     """
     r = _reg.parse(todos_path.read_text())
     active = [s for s in r.streams if s.status == "active"]
     visible = [s for s in r.streams if s.status != "archived"]
+
+    # Guard: non-interactive context — cannot call input()
+    if not sys.stdin.isatty():
+        print(_stream_selection_needed_json(visible))
+        return None
 
     project_root = todos_path.parent
     print("\nStreams in this project:")
@@ -371,7 +399,9 @@ def pick_stream_interactively(todos_path: Path) -> str | None:
     try:
         raw = input(prompt).strip()
     except EOFError:
-        raw = ""
+        # EOF on a TTY is unusual but guard it: never auto-claim or recurse.
+        print(_stream_selection_needed_json(visible))
+        return None
 
     if raw == "" and default_idx is not None:
         return visible[default_idx - 1].slug
@@ -429,7 +459,7 @@ def attempt_claim(todos_path: Path, slug: str, session_id: str, now_iso: str,
     successful claim, False if the user declined or the claim couldn't be
     made."""
     result = _reg.claim(todos_path, slug=slug, session_id=session_id,
-                        now_iso=now_iso, force=False)
+                        now_iso=now_iso, force=force)
     if result.claimed:
         return True
 
@@ -459,6 +489,22 @@ def attempt_claim(todos_path: Path, slug: str, session_id: str, now_iso: str,
     print("             `closed-` prefix → prior session ended cleanly; if you see")
     print("             `closed-` here, the registry is out of sync — reclaim flags it.")
     print()
+
+    # Non-interactive context: cannot prompt; instruct Claude to re-invoke with --force-stream
+    if not sys.stdin.isatty():
+        import json as _json
+        print("STREAM_RECLAIM_NEEDED: " + _json.dumps({
+            "slug": slug,
+            "holder": holder,
+            "title": title,
+            "notes": str(notes_path) if notes_path else None,
+            "instruction": (
+                "Present the contention warning to the user. If they confirm reclaim, "
+                "re-invoke with --stream <slug> --force-stream"
+            ),
+        }))
+        return False
+
     try:
         ans = input("Reclaim? [y/N]: ").strip().lower()
     except EOFError:
@@ -518,17 +564,54 @@ def main():
                         help="Claim this stream non-interactively")
     parser.add_argument("--no-stream", action="store_true",
                         help="Start a free session without prompting")
+    parser.add_argument("--list-streams", action="store_true",
+                        help="Print stream registry as JSON and exit (no session init)")
+    parser.add_argument("--force-stream", action="store_true",
+                        help="Skip reclaim confirmation when --stream targets a claimed stream")
+    parser.add_argument(
+        "--project-path",
+        default=None,
+        metavar="PATH",
+        help="Explicit project root to search from (default: cwd). "
+             "Use this when running from a parent workspace to target a specific project.",
+    )
 
     args = parser.parse_args()
 
     # Find the index file
-    index_path = find_transcripts_index(Path.cwd())
+    start_dir = Path(args.project_path).resolve() if args.project_path else Path.cwd()
+    index_path = find_transcripts_index(start_dir)
     if index_path is None:
         print("Error: No .archive/transcripts/_index.md found in directory hierarchy",
               file=sys.stderr)
         print("Run /init-project to set up llm-dev infrastructure first",
               file=sys.stderr)
         sys.exit(1)
+
+    # --list-streams: emit registry as JSON and exit without initializing a session
+    if args.list_streams:
+        import json as _json
+        archive_dir = index_path.parent.parent
+        todos_path = archive_dir.parent / "CURRENT-TODOs.md"
+        now = datetime.now()
+        ensure_streams_section(todos_path, today=now.strftime("%Y-%m-%d"))
+        r = _reg.parse(todos_path.read_text())
+        visible = [s for s in r.streams if s.status != "archived"]
+        print(_json.dumps({
+            "streams": [
+                {
+                    "slug": s.slug,
+                    "name": s.name,
+                    "status": s.status,
+                    "claimed": s.claim is not None,
+                    "claim_session": s.claim,
+                    "since": s.since,
+                    "last_handoff": s.last_handoff,
+                }
+                for s in visible
+            ]
+        }, indent=2))
+        return 0
 
     # Get current conversation number and compute next via cross-check
     try:
@@ -639,7 +722,7 @@ def main():
     elif args.stream:
         if not attempt_claim(todos_path, slug=args.stream, session_id=session_id,
                              now_iso=datetime.now().strftime("%Y-%m-%dT%H:%MZ"),
-                             force=False):
+                             force=args.force_stream):
             print(f"\nAborted: could not claim stream `{args.stream}`.")
             return 1
         selected_slug = args.stream

@@ -1,6 +1,6 @@
 ---
 description: Initialize a new LLM session for transcript tracking
-argument-hint: [--model MODEL] [--user USERNAME]
+argument-hint: [--model MODEL] [--user USERNAME] [--project-path PATH]
 allowed-tools: Bash(*)
 ---
 
@@ -41,14 +41,35 @@ and you can proceed normally.
 
 ## Stream Selection
 
-When `/llm-dev:init-session` runs, the handler offers stream selection:
+The handler cannot block on terminal input when running under Claude Code's
+Bash tool. Stream selection is a **two-step, Claude-mediated flow**:
 
-- **No arg** (interactive): print the registry and prompt to pick. When
-  exactly one `active` stream exists, pressing Enter selects it.
-- `--stream <slug>`: claim that stream non-interactively. If already
-  claimed by another session, surfaces a contention warning with the
-  holder's session ID, title, and notes file; asks to confirm reclaim.
+### Standard flow (no contention)
+
+1. Run the handler with no `--stream`/`--no-stream` arg. The handler detects
+   a non-TTY context and prints `STREAM_SELECTION_NEEDED: <JSON>` listing all
+   visible streams, then returns without initializing.
+2. Present the streams to the user and ask which to claim (or free session).
+3. Re-invoke with `--stream <slug>` or `--no-stream`.
+
+Alternatively, call `--list-streams` first to get the full registry as JSON
+(with claim status, last handoff path, etc.), present options, then re-invoke.
+
+### Contention flow (stream already claimed)
+
+If `--stream <slug>` targets an already-claimed stream, the handler prints
+`STREAM_RECLAIM_NEEDED: <JSON>` with the holder's session ID, title, and notes
+file, and returns without claiming.
+
+1. Surface the contention warning to the user.
+2. If they confirm reclaim, re-invoke with `--stream <slug> --force-stream`.
+
+### Non-interactive flags
+
+- `--stream <slug>`: claim that stream non-interactively.
 - `--no-stream`: start a free session without prompting.
+- `--list-streams`: emit the stream registry as JSON and exit (no session init).
+- `--force-stream`: skip the reclaim confirmation dialog (use after user confirms).
 
 The selected stream determines:
 - Which prior handoff is loaded as resume context.
@@ -87,7 +108,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py $ARGUMENTS
 - `--user USERNAME` - GitHub username for transcript attribution (default: prompts user)
 - `--stream <slug>` - Claim a specific stream non-interactively
 - `--no-stream` - Start a free session without stream selection
+- `--list-streams` - Print the stream registry as JSON and exit (no session init)
+- `--force-stream` - Skip reclaim confirmation when `--stream` targets a claimed stream
 - `--dry-run` - Show what would be done without modifying files
+- `--project-path PATH` - Explicit project root to search from (default: cwd). Use
+  this when running from a parent workspace so the correct project's
+  `.archive/transcripts/_index.md` is targeted instead of the workspace's.
 
 ## After Running
 
