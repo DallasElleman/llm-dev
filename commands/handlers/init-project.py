@@ -38,6 +38,16 @@ def validate_project_name(name: str) -> bool:
 
 def prompt_user(message: str, default: str = "") -> str:
     """Prompt user for input with optional default"""
+    if not sys.stdin.isatty():
+        if default:
+            print(f"Non-interactive: {message!r} not set — using default: {default!r}")
+            return default
+        print(
+            f"Error: non-interactive context — '{message}' is required. "
+            "Supply it via a CLI argument.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     try:
         if default:
             response = input(f"{message} [{default}]: ").strip()
@@ -55,6 +65,10 @@ def prompt_user(message: str, default: str = "") -> str:
 
 def prompt_yes_no(message: str, default: bool = True) -> bool:
     """Prompt user for yes/no confirmation"""
+    if not sys.stdin.isatty():
+        default_str = "yes" if default else "no"
+        print(f"Non-interactive: {message!r} not set — using default: {default_str!r}")
+        return default
     default_str = "Y/n" if default else "y/N"
     try:
         response = input(f"{message} [{default_str}]: ").strip().lower()
@@ -176,6 +190,37 @@ def _make_minimal_streams_block(today: str) -> list:
     ]
 
 
+def _remove_orphaned_streams_table(lines: list) -> tuple:
+    """Strip Streams-table blocks that appear outside a ## Streams section.
+
+    A Streams-table block starts with a '| Slug |' header row and includes all
+    immediately following pipe-delimited rows.  Returns (cleaned_lines, was_changed).
+    """
+    result = []
+    changed = False
+    in_streams_section = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if re.match(r'^## Streams\s*$', line):
+            in_streams_section = True
+            result.append(line)
+            i += 1
+        elif re.match(r'^## ', line):
+            in_streams_section = False
+            result.append(line)
+            i += 1
+        elif not in_streams_section and re.match(r'^\| *Slug *\|', line, re.IGNORECASE):
+            # Orphaned Streams table header — skip it and all following table rows.
+            changed = True
+            while i < len(lines) and lines[i].strip().startswith('|'):
+                i += 1
+        else:
+            result.append(line)
+            i += 1
+    return result, changed
+
+
 def _migrate_streams_to_top(content: str, today: str) -> tuple:
     """Ensure ## Streams is the first ## section in the document.
 
@@ -201,11 +246,18 @@ def _migrate_streams_to_top(content: str, today: str) -> tuple:
         insert_at = h2_pos[0]
         header = _strip_trailing_blank(lines[:insert_at])
         streams_block = _make_minimal_streams_block(today)
-        new_lines = header + [''] + streams_block + [''] + lines[insert_at:]
+        # Remove any bare Streams table rows left by a previous partial migration.
+        rest, _ = _remove_orphaned_streams_table(lines[insert_at:])
+        new_lines = header + [''] + streams_block + [''] + rest
         new_lines = _strip_trailing_blank(new_lines)
         return '\n'.join(new_lines) + '\n', True
 
     if streams_h2_idx == 0:
+        # Already at top — clean up any orphaned Streams table rows elsewhere.
+        cleaned, orphans_removed = _remove_orphaned_streams_table(lines)
+        if orphans_removed:
+            cleaned = _strip_trailing_blank(cleaned)
+            return '\n'.join(cleaned) + '\n', True
         return content, False
 
     def get_section(idx):

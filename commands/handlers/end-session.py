@@ -89,6 +89,22 @@ def since_lookup_from_registry(todos_path: Path, slug: str) -> str:
     return s.since if s and s.since else "unknown"
 
 
+def _pii_review_needed_json(findings: list) -> str:
+    """Return a PII_REVIEW_NEEDED structured signal for non-interactive contexts.
+
+    Mirrors the STREAM_SELECTION_NEEDED pattern from init-session.py: callers
+    print this string so Claude can relay findings and re-invoke with --sanitize.
+    """
+    return "PII_REVIEW_NEEDED: " + json.dumps({
+        "findings": findings,
+        "instruction": (
+            "PII was detected in the transcript. Re-invoke with --sanitize to "
+            "automatically redact, or run interactively to choose "
+            "[c]ommit anyway / [s]anitize / [a]bort."
+        ),
+    })
+
+
 class Version:
     """Semantic version parser and bumper."""
 
@@ -1075,14 +1091,20 @@ class TranscriptGenerator:
 
         # Prompt for confirmation (unless in dry-run mode)
         if not self.dry_run:
-            try:
-                response = input("Continue with this version? [Y/n]: ").strip().lower()
-                if response and response not in ('y', 'yes'):
-                    print("Aborted by user.")
+            if not sys.stdin.isatty():
+                print(
+                    f"Non-interactive: proceeding with version {new_version} "
+                    f"({self.bump_type} bump). Pass --dry-run to preview."
+                )
+            else:
+                try:
+                    response = input("Continue with this version? [Y/n]: ").strip().lower()
+                    if response and response not in ('y', 'yes'):
+                        print("Aborted by user.")
+                        sys.exit(0)
+                except (KeyboardInterrupt, EOFError):
+                    print("\nAborted by user.")
                     sys.exit(0)
-            except (KeyboardInterrupt, EOFError):
-                print("\nAborted by user.")
-                sys.exit(0)
 
         if self.dry_run:
             print("\n[DRY RUN MODE]")
@@ -1112,6 +1134,14 @@ class TranscriptGenerator:
 
         if findings and not self.sanitize:
             self._report_findings(findings)
+            if not sys.stdin.isatty():
+                print(_pii_review_needed_json(findings))
+                print(
+                    "\nAborted: PII detected in non-interactive context. "
+                    "Re-invoke with --sanitize to auto-redact.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             try:
                 response = input(
                     "Options: [c]ommit anyway / [s]anitize and commit / [a]bort: "
