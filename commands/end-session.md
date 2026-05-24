@@ -11,18 +11,43 @@ next session, then archive this conversation as a JSON transcript.
 
 ## Flow (you, Claude, perform these in order)
 
-1. **Read the prior handoff** (if it exists), so you can carry the chain
+1. **Finalize the session notes.** Before writing the handoff, do a final pass
+   on this session's notes file (`.archive/session-notes/{date_yyyymmdd}-{NNN}-*-session-notes.md`):
+   capture what worked, lessons learned, mistakes made, and assumptions proven
+   wrong from this session. The notes are the cross-session learning artifact and
+   the handler commits them **as-is** — if you don't update them now, they archive
+   stale. Follow the **Session Notes Nudge** section below.
+2. **Read the prior handoff** (if it exists), so you can carry the chain
    forward. Look in `.archive/session-handoff/` for the most recent
    `*-session-handoff.md`. If one exists, read it. If not, skip.
-2. **Write the new handoff file** at:
+3. **Write the new handoff file** at:
    `.archive/session-handoff/{date_yyyymmdd}-{NNN}-session-handoff.md`
    where `NNN` is the zero-padded session number (e.g., `010`) and
    `date_yyyymmdd` is today's date (e.g., `20260430`). Follow the **Handoff
    Nudge** section below.
-3. **Run the transcript handler** to archive everything:
+4. **Run the transcript handler** to archive everything:
    ```bash
    python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--sanitize] [--dry-run]
    ```
+
+## Session Notes Nudge
+
+> Before the handoff, take a moment to finalize the session notes — they're the
+> retrospective, cross-session learning artifact (the handoff is forward-looking;
+> don't duplicate between them).
+>
+> Update the notes file with anything from this session not already captured:
+>
+> - **What worked** — validated approaches, decisions worth repeating.
+> - **Lessons learned** — broadly applicable insights.
+> - **Mistakes made** — and how they were corrected.
+> - **Assumptions proven wrong** — what you believed that turned out false.
+> - **Other observations** — durable, non-obvious findings worth distilling later.
+>
+> Favor specific, durable observations over play-by-play narration. Capture wins
+> as readily as misses — positive validations fuel future improvement too. If the
+> notes were kept current throughout the session, this is a quick confirmation
+> pass, not a rewrite.
 
 ## Handoff Nudge
 
