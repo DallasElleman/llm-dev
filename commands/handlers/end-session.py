@@ -31,7 +31,7 @@ import re
 import subprocess
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -60,6 +60,79 @@ def build_session_doc_filename(yyyymmdd: str, nnn: str, suffix: str,
     if stream_slug:
         return f"{yyyymmdd}-{nnn}-{stream_slug}-{suffix}"
     return f"{yyyymmdd}-{nnn}-{suffix}"
+
+
+def resolve_session_date(notes_dir: Path, index_path: Path, nnn: str,
+                         fallback: str) -> str:
+    """Resolve a session's canonical START date as YYYYMMDD.
+
+    A session that spans midnight must file its whole bundle (transcript,
+    notes, handoff) under one date. The notes file (created by init-session
+    at session start) is the anchor; the index placeholder is the next-best
+    source; `fallback` (typically today) is the last resort.
+    """
+    # 1. Existing session-notes file: {YYYYMMDD}-{NNN}[-slug]-session-notes.md
+    if notes_dir.is_dir():
+        notes_re = re.compile(rf"^(\d{{8}})-{nnn}(?:-.*)?-session-notes\.md$")
+        dates = sorted(
+            m.group(1) for p in notes_dir.iterdir()
+            if (m := notes_re.match(p.name))
+        )
+        if dates:
+            return dates[0]
+    # 2. Index [In Progress] placeholder File line (immediately follows header)
+    if index_path.exists():
+        content = index_path.read_text(encoding="utf-8")
+        m = re.search(
+            rf"### {nnn} - \[In Progress\]\n\*\*File\*\*:\s*`?(\d{{8}})-placeholder\.json`?",
+            content,
+        )
+        if m:
+            return m.group(1)
+    # 3. Fallback (e.g. today)
+    return fallback
+
+
+def message_span(jsonl_path: Path, fallback: str) -> tuple[str, str]:
+    """Return (started_at, ended_at) ISO timestamps from the first and last
+    non-meta user/assistant messages in the JSONL. Either end falls back to
+    `fallback` when no qualifying message is found."""
+    first = last = None
+    try:
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") not in ("user", "assistant"):
+                    continue
+                if entry.get("isMeta"):
+                    continue
+                ts = entry.get("timestamp")
+                if not ts:
+                    continue
+                if first is None:
+                    first = ts
+                last = ts
+    except OSError:
+        pass
+    return (first or fallback, last or fallback)
+
+
+def format_index_timestamp(iso_ts: str) -> str:
+    """Format an ISO 8601 timestamp as 'YYYY-MM-DD HH:MM UTC' for _index.md.
+    Returns the input unchanged if it cannot be parsed."""
+    try:
+        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+    except (ValueError, TypeError, AttributeError):
+        return iso_ts
 
 
 def release_claim_for_session(todos_path: Path, slug: str, session_id: str,
@@ -151,6 +224,7 @@ class TranscriptGenerator:
         self.bump_type = kwargs.get('bump_type', 'patch')  # 'major', 'minor', or 'patch'
 
         self.sanitize = kwargs.get('sanitize', False)
+        self.push = kwargs.get('push', True)
 
         # Additional outcome fields
         self.provided_files_modified = kwargs.get('files_modified', '')
@@ -186,13 +260,23 @@ class TranscriptGenerator:
         if not self.jsonl_path:
             raise FileNotFoundError(f"Could not find session JSONL: {self.session_id}.jsonl")
 
-        # Generate metadata
+        # Generate metadata. The canonical session date is the START date
+        # (from the notes file / index placeholder), so a session spanning
+        # midnight still files its whole bundle under one consistent date.
         now = datetime.now()
-        self.date_yyyymmdd = now.strftime("%Y%m%d")
-        from datetime import timezone
         self.date_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.date_display = now.strftime("%B %-d, %Y") if os.name != 'nt' else now.strftime("%B %d, %Y").replace(' 0', ' ')
-        self.date_changelog = now.strftime("%Y-%m-%d")
+        self.date_yyyymmdd = resolve_session_date(
+            self.archive_dir / "session-notes",
+            self.index_path,
+            self.session_num_padded,
+            fallback=now.strftime("%Y%m%d"),
+        )
+        canonical = datetime.strptime(self.date_yyyymmdd, "%Y%m%d")
+        self.date_display = (
+            canonical.strftime("%B %-d, %Y") if os.name != 'nt'
+            else canonical.strftime("%B %d, %Y").replace(' 0', ' ')
+        )
+        self.date_changelog = canonical.strftime("%Y-%m-%d")
 
         self.title_kebab = self._to_kebab_case(title)
         self.stream_slug = stream_slug  # None when this session held no claim
@@ -478,12 +562,16 @@ class TranscriptGenerator:
                     'changes': 'Modified file'
                 })
 
+        started_at, ended_at = message_span(self.jsonl_path, self.date_iso)
+
         # Build transcript
         transcript = {
             'project_id': self.project_id,
             'conversation_id': self.conversation_id,
             'conversation_number': self.session_num,
             'date': self.date_iso,
+            'started_at': started_at,
+            'ended_at': ended_at,
             'participants': [
                 {
                     'name': self.user_name,
@@ -728,10 +816,15 @@ class TranscriptGenerator:
         else:
             user_display = self.user_name
 
+        _date_iso = getattr(self, 'date_iso', '')
+        started_disp = format_index_timestamp(transcript.get('started_at', _date_iso))
+        ended_disp = format_index_timestamp(transcript.get('ended_at', _date_iso))
+
         # Build README entry
         readme_entry = f"""### {self.session_num_padded} - {self.title}
 **File**: {self.conversation_id}.json
-**Date**: {self.date_display}
+**Started**: {started_disp}
+**Ended**: {ended_disp}
 **Participants**: {user_display}, {model_display}
 **Topics**: {topics}
 **Outcomes**: {outcomes}"""
@@ -740,7 +833,7 @@ class TranscriptGenerator:
         content = self.index_path.read_text(encoding='utf-8')
 
         # Pattern to match the placeholder entry (including Session line)
-        pattern = rf'### {self.session_num_padded} - \[In Progress\]\n\*\*File\*\*:.*?\n\*\*Date\*\*:.*?\n\*\*Participants\*\*:.*?\n(\*\*Session\*\*:.*?\n)?\*\*Topics\*\*:.*?\n\*\*Outcomes\*\*:.*?(?=\n\n|\n##|\Z)'
+        pattern = rf'### {self.session_num_padded} - \[In Progress\]\n\*\*File\*\*:.*?\n\*\*Started\*\*:.*?\n\*\*Ended\*\*:.*?\n\*\*Participants\*\*:.*?\n(\*\*Session\*\*:.*?\n)?\*\*Topics\*\*:.*?\n\*\*Outcomes\*\*:.*?(?=\n\n|\n##|\Z)'
 
         # Replace placeholder
         new_content = re.sub(pattern, readme_entry, content, flags=re.DOTALL)
@@ -867,9 +960,9 @@ class TranscriptGenerator:
 
         # Home directory paths (extract username from pattern)
         home_patterns = [
-            (r'/Users/([^/\s"]+)/', 'macOS home path'),
-            (r'/home/([^/\s"]+)/', 'Linux home path'),
-            (r'C:\\\\Users\\\\([^\\\\"\s]+)\\\\', 'Windows home path'),
+            (r'/Users/([A-Za-z0-9._\-]+)', 'macOS home path'),
+            (r'/home/([A-Za-z0-9._\-]+)', 'Linux home path'),
+            (r'C:\\\\Users\\\\([A-Za-z0-9._\-]+)', 'Windows home path'),
         ]
         for pattern, label in home_patterns:
             matches = re.findall(pattern, content)
@@ -926,11 +1019,11 @@ class TranscriptGenerator:
         for finding in findings:
             if 'username' in finding:
                 username = finding['username']
-                sanitized = sanitized.replace(f'/Users/{username}/', '/Users/<user>/')
-                sanitized = sanitized.replace(f'/home/{username}/', '/home/<user>/')
+                sanitized = sanitized.replace(f'/Users/{username}', '/Users/<user>')
+                sanitized = sanitized.replace(f'/home/{username}', '/home/<user>')
                 sanitized = sanitized.replace(
-                    f'C:\\\\Users\\\\{username}\\\\',
-                    'C:\\\\Users\\\\<user>\\\\'
+                    f'C:\\\\Users\\\\{username}',
+                    'C:\\\\Users\\\\<user>'
                 )
 
         # Replace participant name
@@ -1065,12 +1158,32 @@ class TranscriptGenerator:
             )
 
             print(f"\nGit commit successful: {commit_message}")
+            self._git_push()
 
         except subprocess.CalledProcessError as e:
             # Don't fail if git commit fails - just report it
             print(f"\nWarning: Git commit failed: {e}")
         except Exception as e:
             print(f"\nWarning: Could not commit to git: {e}")
+
+    def _git_push(self) -> None:
+        """Best-effort push of the archive commit. No-op unless self.push.
+        Non-fatal: a failure (no upstream, detached HEAD, no remote) warns
+        and leaves the local commit in place."""
+        if not getattr(self, 'push', True):
+            return
+        branch = subprocess.run(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            cwd=str(self.project_dir), capture_output=True, text=True, check=False,
+        ).stdout.strip() or 'HEAD'
+        try:
+            subprocess.run(['git', 'push'], cwd=str(self.project_dir),
+                           check=True, capture_output=True)
+            print("Pushed to remote.")
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.decode().strip() if isinstance(e.stderr, bytes) else str(e.stderr or '').strip()
+            print(f"\nWarning: git push failed ({stderr}). "
+                  f"Push manually with: git push -u origin {branch}")
 
     def run(self) -> None:
         """Main execution flow."""
@@ -1238,7 +1351,17 @@ Examples:
     parser.add_argument(
         '--sanitize',
         action='store_true',
-        help='Automatically redact PII (home paths, names) without prompting'
+        help='Automatically redact PII (home paths, names) without prompting (now the default; kept for backwards compatibility)'
+    )
+    parser.add_argument(
+        '--no-sanitize',
+        action='store_true',
+        help='Disable automatic PII redaction (restores the interactive prompt / non-interactive abort)'
+    )
+    parser.add_argument(
+        '--no-push',
+        action='store_true',
+        help='Skip pushing the archive commit to the remote (default: push)'
     )
     parser.add_argument(
         '--files-modified',
@@ -1283,10 +1406,11 @@ Examples:
             session_id=args.session_id,
             topics=args.topics,
             dry_run=args.dry_run,
-            sanitize=args.sanitize,
+            sanitize=not args.no_sanitize,
             model=args.model,
             user=args.user,
             bump_type=bump_type,
+            push=not args.no_push,
             files_modified=getattr(args, 'files_modified', ''),
             artifacts=getattr(args, 'artifacts', ''),
             decisions=getattr(args, 'decisions', ''),

@@ -92,7 +92,8 @@ def create_placeholder_entry(
     """Create the placeholder entry text"""
     return f"""### {num_padded} - [In Progress]
 **File**: `{date_yyyymmdd}-placeholder.json`
-**Date**: {date_display}
+**Started**: {date_display}
+**Ended**: [In Progress]
 **Participants**: {username}, {model_display}
 **Session**: {session_id}
 **Topics**: [To be determined]
