@@ -384,6 +384,33 @@ def _stream_selection_needed_json(visible: list) -> str:
     })
 
 
+def _stream_discovery_json(visible: list, project_root: Path) -> str:
+    import json as _json
+    return "STREAM_SELECTION_NEEDED: " + _json.dumps({
+        "streams": [
+            {
+                "slug": s.slug,
+                "name": s.name,
+                "status": s.status,
+                "claimed": s.claim is not None,
+                "claim_session": s.claim,
+                "since": s.since,
+                "last_handoff": s.last_handoff,
+                "next_action": _derive_next_action_preview(s.last_handoff, project_root),
+            }
+            for s in visible
+        ],
+        "instruction": (
+            "Present these to the user with the AskUserQuestion tool: one "
+            "option per stream plus a 'Free session (no stream)' option; use "
+            "the 'Other' free-text box for a new or overflow stream. Then "
+            "re-invoke init-session.py with --stream <slug> (add --force-stream "
+            "after a confirmed reclaim) or --no-stream, plus --model <your "
+            "model id>."
+        ),
+    })
+
+
 def pick_stream_interactively(todos_path: Path) -> str | None:
     """Print the registry and prompt the user. Returns selected slug or None
     on skip. Default-selection rules per the design spec:
@@ -635,6 +662,21 @@ def main():
         }, indent=2))
         return 0
 
+    # Stream-selection discovery: a non-interactive run with neither --stream
+    # nor --no-stream emits the registry and exits WITHOUT initializing, so
+    # Claude can present choices (AskUserQuestion) and re-invoke with a flag.
+    # Initializing here would force a double-increment on the re-invoke.
+    if (not args.stream and not args.no_stream
+            and not args.dry_run and not sys.stdin.isatty()):
+        archive_dir = index_path.parent.parent
+        todos_path = archive_dir.parent / "CURRENT-TODOs.md"
+        disc_now = datetime.now()
+        ensure_streams_section(todos_path, today=disc_now.strftime("%Y-%m-%d"))
+        r = _reg.parse(todos_path.read_text())
+        visible = [s for s in r.streams if s.status != "archived"]
+        print(_stream_discovery_json(visible, archive_dir.parent))
+        return 0
+
     # Get current conversation number and compute next via cross-check
     try:
         current_num = get_current_number(index_path)
@@ -657,7 +699,7 @@ def main():
     model_display = get_model_display_name(args.model)
 
     # Get session ID
-    session_id = _session.find_session_id()
+    session_id = _session.find_session_id(Path.cwd())
     if session_id == "unknown":
         import os as _os
         session_id = f"claude-{new_num_padded}-{_os.urandom(3).hex()}"

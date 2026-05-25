@@ -41,41 +41,51 @@ and you can proceed normally.
 
 ## Stream Selection
 
-The handler cannot block on terminal input when running under Claude Code's
-Bash tool. Stream selection is a **two-step, Claude-mediated flow**:
+Run with **neither** `--stream` nor `--no-stream` and the handler is in
+**discovery mode**: it prints `STREAM_SELECTION_NEEDED: <JSON>` (visible
+streams, each with claim status, last handoff, and a one-line `next_action`
+preview) and **exits without initializing anything**. Drive selection like
+this:
 
-### Standard flow (no contention)
+1. **Discover.** Run the handler with no `--stream`/`--no-stream` flag (see
+   Usage). Parse the `STREAM_SELECTION_NEEDED:` JSON from its output.
+2. **Present with `AskUserQuestion`.** Build one question whose options are:
+   - one option per stream in the JSON (active first; mark the stream with
+     the most recent handoff `(Recommended)`). Put its claim status and
+     `next_action` preview in the option description.
+   - a **"Free session (no stream)"** option.
 
-1. Run the handler with no `--stream`/`--no-stream` arg. The handler detects
-   a non-TTY context and prints `STREAM_SELECTION_NEEDED: <JSON>` listing all
-   visible streams, then returns without initializing.
-2. Present the streams to the user and ask which to claim (or free session).
-3. Re-invoke with `--stream <slug>` or `--no-stream`.
+   The automatic **"Other"** free-text box covers creating a new stream or
+   picking a stream beyond the 4-option limit.
+3. **Initialize once.** Map the answer to a single re-invocation, always
+   passing `--model <your model id>` (e.g. `claude-opus-4-7`):
+   - a stream → `--stream <slug> --model <id>`
+   - "Free session" → `--no-stream --model <id>`
+   - "Other" text: an existing slug → `--stream <slug>`; `new <slug>` or a
+     new name → run `/llm-dev:stream new <slug> "<name>"` first, then
+     `--stream <slug>`; "free"/"none" → `--no-stream`. If the text is
+     ambiguous, ask again rather than guessing.
 
-Alternatively, call `--list-streams` first to get the full registry as JSON
-(with claim status, last handoff path, etc.), present options, then re-invoke.
+The session initializes **exactly once**, on step 3.
 
-### Contention flow (stream already claimed)
+### Contention (chosen stream already claimed)
 
-If `--stream <slug>` targets an already-claimed stream, the handler prints
-`STREAM_RECLAIM_NEEDED: <JSON>` with the holder's session ID, title, and notes
-file, and returns without claiming.
+If `--stream <slug>` targets a claimed stream, the handler prints
+`STREAM_RECLAIM_NEEDED: <JSON>` (holder session id, title, notes file) and
+does not claim. Surface this with an `AskUserQuestion` confirm; if the user
+chooses to reclaim, re-invoke `--stream <slug> --force-stream --model <id>`.
 
-1. Surface the contention warning to the user.
-2. If they confirm reclaim, re-invoke with `--stream <slug> --force-stream`.
+### Flags
 
-### Non-interactive flags
+- `--stream <slug>` — claim that stream and initialize.
+- `--no-stream` — initialize a free session (no stream).
+- `--force-stream` — skip the reclaim confirmation (after the user confirms).
+- `--list-streams` — print the registry as JSON and exit (no init); an
+  alternative discovery source.
 
-- `--stream <slug>`: claim that stream non-interactively.
-- `--no-stream`: start a free session without prompting.
-- `--list-streams`: emit the stream registry as JSON and exit (no session init).
-- `--force-stream`: skip the reclaim confirmation dialog (use after user confirms).
-
-The selected stream determines:
-- Which prior handoff is loaded as resume context.
-- Whether the session-notes/handoff/transcript filenames include the
-  stream slug.
-- Whether `/end-session` updates the stream's registry row.
+The selected stream determines which prior handoff is loaded as resume
+context, whether the notes/handoff/transcript filenames include the stream
+slug, and whether `/end-session` updates the stream's registry row.
 
 ## Session Notes (Living Document)
 
@@ -96,15 +106,27 @@ durable observations over play-by-play narration.
 
 ## Usage
 
-Run the initialization script:
+**Step 1 — discover** (no stream flag): the handler prints
+`STREAM_SELECTION_NEEDED` and exits without initializing.
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py $ARGUMENTS
 ```
 
+**Step 3 — initialize** (after the user picks): re-run with the chosen flag
+and your model id.
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py --stream <slug> --model <your-model-id>
+# or, for a free session:
+python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py --no-stream --model <your-model-id>
+```
+
 ## Arguments
 
-- `--model MODEL` - LLM model identifier (default: claude-sonnet-4-6)
+- `--model MODEL` - LLM model identifier. **Always pass your own model id**
+  (e.g. `claude-opus-4-7`) on the step-3 init call so the session records the
+  correct model; the handler default (`claude-sonnet-4-6`) is only a fallback.
 - `--user USERNAME` - GitHub username for transcript attribution (default: prompts user)
 - `--stream <slug>` - Claim a specific stream non-interactively
 - `--no-stream` - Start a free session without stream selection

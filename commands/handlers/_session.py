@@ -10,21 +10,29 @@ RECENT_WINDOW_SECONDS = 300  # files modified within last 5 min are "ours"
 RENAME_RE = re.compile(r'named this session "([^"]+)"')
 
 
-def find_session_id() -> str:
+def find_session_id(cwd: Path | None = None) -> str:
     """Return the current Claude Code session UUID, or 'unknown'.
 
     Looks in ~/.claude/projects/ for the most recently modified *.jsonl,
-    excluding agent-* files. Only considers files modified in the last 5
-    minutes (anything older is presumably a prior session).
+    excluding agent-* files, modified within the last 5 minutes. When `cwd`
+    is given and its encoded project dir exists, the search is scoped to that
+    dir so a concurrent session in a *different* project can't be returned.
+    Falls back to a global search when the encoded dir is absent.
     """
     if not PROJECTS_DIR.exists():
         return "unknown"
 
+    search_root = PROJECTS_DIR
+    if cwd is not None:
+        encoded = str(cwd.resolve()).replace("/", "-")
+        proj = PROJECTS_DIR / encoded
+        if proj.is_dir():
+            search_root = proj
+
     threshold = time.time() - RECENT_WINDOW_SECONDS
     candidates = []
     try:
-        # Search recursively so per-cwd subdirs are covered
-        for jsonl in PROJECTS_DIR.rglob("*.jsonl"):
+        for jsonl in search_root.rglob("*.jsonl"):
             if jsonl.name.startswith("agent-"):
                 continue
             try:
