@@ -137,26 +137,28 @@ def cmd_release(todos_path: Path, slug: str, session_id: str,
     return 0
 
 
-def _detect_inflight_nnn(notes_dir: Path) -> str | None:
-    """Find the highest NNN in session-notes files modified in the last
-    hour — that's the in-flight session."""
-    if not notes_dir.exists():
+def _detect_inflight_nnn(index_path: Path, session_id: str | None) -> str | None:
+    """Resolve the current session's NNN from the transcript index.
+
+    Matches the `### NNN - [In Progress]` entry whose `**Session**:` equals
+    `session_id`. Concurrency-safe: it keys on the session id rather than
+    assuming a single in-flight entry (multiple sessions in one project each
+    add their own `[In Progress]` entry). Returns None when there is no match
+    — callers should then require an explicit `--nnn`.
+    """
+    if not session_id or session_id == "unknown" or not index_path.exists():
         return None
-    import time
-    threshold = time.time() - 3600
-    best: tuple[float, str] | None = None
-    for p in notes_dir.glob("*-session-notes.md"):
-        try:
-            mtime = p.stat().st_mtime
-        except OSError:
-            continue
-        if mtime < threshold:
-            continue
-        m = re.match(r"^\d{8}-(\d{3})", p.name)
-        if m:
-            if best is None or mtime > best[0]:
-                best = (mtime, m.group(1))
-    return best[1] if best else None
+    content = index_path.read_text(encoding="utf-8")
+    # The tempered dot `(?:(?!###).)*?` keeps each match inside its own
+    # entry: it never consumes across the next `###` header, so an entry
+    # missing its `**Session**:` line can't borrow the following entry's id.
+    for m in re.finditer(
+        r"###\s+(\d{3})\s+-\s+\[In Progress\](?:(?!###).)*?\*\*Session\*\*:\s*(\S+)",
+        content, re.DOTALL,
+    ):
+        if m.group(2).strip() == session_id:
+            return m.group(1)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,6 +181,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p_join = sub.add_parser("join", help="Claim a stream mid-session")
     p_join.add_argument("slug")
+    p_join.add_argument("--nnn", default=None,
+                        help="Session number from /llm-dev:init-session "
+                             "(e.g. 015). Used to find the in-flight notes file.")
     sub.add_parser("release", help="Release this session's stream claim")
 
     args = parser.parse_args(argv)
@@ -199,19 +204,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "rename":
         return cmd_rename(todos, old_slug=args.old_slug, new_slug=args.new_slug)
     if args.cmd == "join":
-        session_id = _session.find_session_id()
+        session_id = _session.find_session_id(Path.cwd())
         notes_dir = todos.parent / ".archive" / "session-notes"
-        nnn = _detect_inflight_nnn(notes_dir)
+        index_path = todos.parent / ".archive" / "transcripts" / "_index.md"
+        nnn = args.nnn or _detect_inflight_nnn(index_path, session_id)
         if nnn is None:
-            print("Could not detect in-flight session number — run "
-                  "/llm-dev:init-session first.", file=sys.stderr)
+            print("Could not determine the session number. Pass --nnn <N> "
+                  "(the number shown by /llm-dev:init-session).",
+                  file=sys.stderr)
             return 1
         return cmd_join(todos_path=todos, slug=args.slug, session_id=session_id,
                         nnn=nnn, yyyymmdd=datetime.now().strftime("%Y%m%d"),
                         notes_dir=notes_dir,
                         now_iso=datetime.now().strftime("%Y-%m-%dT%H:%MZ"))
     if args.cmd == "release":
-        session_id = _session.find_session_id()
+        session_id = _session.find_session_id(Path.cwd())
         r = _reg.parse(todos.read_text())
         held = next((s for s in r.streams if s.claim == session_id), None)
         if held is None:
