@@ -21,13 +21,15 @@ next session, then archive this conversation as a JSON transcript.
    forward. Look in `.archive/session-handoff/` for the most recent
    `*-session-handoff.md`. If one exists, read it. If not, skip.
 3. **Write the new handoff file** at:
-   `.archive/session-handoff/{date_yyyymmdd}-{NNN}-session-handoff.md`
-   where `NNN` is the zero-padded session number (e.g., `010`) and
-   `date_yyyymmdd` is today's date (e.g., `20260430`). Follow the **Handoff
-   Nudge** section below.
+   `.archive/session-handoff/{date}-{NNN}-session-handoff.md`
+   where `NNN` is the zero-padded session number (e.g., `010`) and `{date}` is
+   the **same `YYYYMMDD` prefix as this session's notes file** — not today's
+   date. The handler dates the whole bundle (transcript, notes, handoff) from
+   that start-date prefix, so a session that spans midnight stays consistent.
+   Follow the **Handoff Nudge** section below.
 4. **Run the transcript handler** to archive everything:
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--sanitize] [--dry-run]
+   python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--dry-run]
    ```
 
 ## Session Notes Nudge
@@ -126,9 +128,10 @@ and no registry interaction.
 2. **Converts JSONL** — Claude Code's native format → llm-dev JSON format
 3. **Generates outcomes** — Analyzes conversation for files created/modified
 4. **Scans for PII** — Checks for home paths, names, emails, potential secrets before commit
-5. **Updates index** — Replaces `[In Progress]` placeholder with the actual entry
+5. **Updates index** — Replaces `[In Progress]` placeholder with the actual entry (with **Started** / **Ended** timestamps)
 6. **Updates CHANGELOG** — Adds new entry at top (reverse-chronological)
 7. **Commits the bundle** — Stages and commits transcript + session-notes + session-handoff (warns if handoff is missing)
+8. **Pushes the commit** — Pushes the current branch to its remote by default (best-effort and non-fatal; a missing upstream just warns). Pass `--no-push` to skip.
 
 ## Arguments
 
@@ -136,7 +139,8 @@ and no registry interaction.
 - `title` — Brief title, 3-7 words (e.g., "Plugin Development and Testing")
 - `--stream <slug>` — Override stream slug for this session. By default, end-session looks up which stream (if any) is claimed by this session's ID in CURRENT-TODOs.md; pass `--stream` only to force a specific slug or override.
 - `--topics "t1, t2"` — Optional comma-separated topics (auto-generated if omitted)
-- `--sanitize` — Automatically redact PII (home paths, participant names) without prompting
+- `--no-sanitize` — Disable automatic PII redaction. By default `/end-session` redacts home paths and participant names; pass this to restore the interactive commit/sanitize/abort prompt (or, non-interactively, the `PII_REVIEW_NEEDED` abort). (`--sanitize` is still accepted but redundant.)
+- `--no-push` — Skip pushing the archive commit. By default the handler pushes the current branch to its remote (best-effort; a missing upstream just warns).
 - `--dry-run` — Preview without writing files
 
 ## Example
