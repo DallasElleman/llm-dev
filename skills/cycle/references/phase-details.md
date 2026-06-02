@@ -21,7 +21,7 @@ Extended guidance for each phase of the development cycle. Load this reference w
 1. At the start of a delegatable phase, check if the corresponding superpowers skill is available
 2. Present the choice to the user (built-in vs. superpowers)
 3. If superpowers is chosen, invoke the skill with the Skill tool
-4. After the superpowers skill completes its workflow, synthesize results into the canonical output file (`brainstorm.md`, `plan.md`, `execute.md`, or `verify.md`)
+4. After the superpowers skill completes its workflow, synthesize results into the canonical output file (`2-brainstorm.md`, `4-plan.md`, `5-execute.md`, or `6-verify.md`)
 5. Advance through the gate as normal
 
 ### Canonical Output Rule
