@@ -17,12 +17,12 @@ Work through each phase in order, producing a markdown file for each. Phases can
 
 | Phase | Output |
 |-------|--------|
-| Review/Reflect | `review.md` |
-| Brainstorm | `brainstorm.md` |
-| Research | `research.md` |
-| Plan | `plan.md` |
-| Execute | `execute.md` |
-| Verify | `verify.md` |
+| Review/Reflect | `1-review.md` |
+| Brainstorm | `2-brainstorm.md` |
+| Research | `3-research.md` |
+| Plan | `4-plan.md` |
+| Execute | `5-execute.md` |
+| Verify | `6-verify.md` |
 
 4. Begin Phase 1.
 
@@ -32,13 +32,13 @@ Work through each phase in order, producing a markdown file for each. Phases can
 
 **Goal**: Load context and identify what you're working with. On iteration 2+, reflect on the previous iteration first.
 
-**Reflection (iteration 2+ only):** If a previous iteration directory exists, read its outputs — especially `execute.md` and `verify.md` — and address:
+**Reflection (iteration 2+ only):** If a previous iteration directory exists, read its outputs — especially `5-execute.md` and `6-verify.md` — and address:
 - What assumptions proved wrong?
 - What worked well and should carry forward?
 - What should change this iteration?
 - Has scope or priority shifted based on what was learned?
 
-Include a **Reflection** section at the top of `review.md`. Lead with this before loading new context — ground the iteration in concrete experience, not a fresh read of original requirements.
+Include a **Reflection** section at the top of `1-review.md`. Lead with this before loading new context — ground the iteration in concrete experience, not a fresh read of original requirements.
 
 **Review:**
 - Ask the user what files, documents, or context to read — don't assume
@@ -47,9 +47,9 @@ Include a **Reflection** section at the top of `review.md`. Lead with this befor
 - Narrow scope: eliminate options, not add them
 - If summarizing user-provided documents, ask the user to verify accuracy
 
-**Output:** Write `review.md` with: reflection (if applicable), context summary, constraints, and candidate approaches.
+**Output:** Write `1-review.md` with: reflection (if applicable), context summary, constraints, and candidate approaches.
 
-**Gate:** "Review written to `iteration-N/review.md`. Ready for Brainstorm, or want to revise?"
+**Gate:** "Review written to `iteration-N/1-review.md`. Ready for Brainstorm, or want to revise?"
 
 ---
 
@@ -60,10 +60,10 @@ Include a **Reflection** section at the top of `review.md`. Lead with this befor
 This phase is a **dialogue, not a monologue**. Ask questions, challenge assumptions, explore edge cases, and think outside the box *with* the user — don't just present a menu of options. Surface insights that neither party would reach alone.
 
 **Superpowers option:** If `superpowers:brainstorming` is available, offer the user a choice:
-> **A)** Use the built-in Brainstorm phase — lighter, produces `brainstorm.md`
+> **A)** Use the built-in Brainstorm phase — lighter, produces `2-brainstorm.md`
 > **B)** Go deep with `superpowers:brainstorming` — visual companion, structured spec workflow
 
-If they choose B, invoke `superpowers:brainstorming`. After it completes, synthesize results into `brainstorm.md` in the iteration directory before advancing.
+If they choose B, invoke `superpowers:brainstorming`. After it completes, synthesize results into `2-brainstorm.md` in the iteration directory before advancing.
 
 **Process:**
 - Start with open-ended questions — understand intent before proposing solutions
@@ -81,9 +81,9 @@ If they choose B, invoke `superpowers:brainstorming`. After it completes, synthe
 
 **Do not write code.** The value is in making decisions before committing to implementation.
 
-**Output:** Write `brainstorm.md` with: chosen concept, alternatives considered and rejected, scope boundaries, and security-relevant boundaries (if applicable).
+**Output:** Write `2-brainstorm.md` with: chosen concept, alternatives considered and rejected, scope boundaries, and security-relevant boundaries (if applicable).
 
-**Gate:** "Brainstorm written to `iteration-N/brainstorm.md`. Ready for Research, or want to revise?"
+**Gate:** "Brainstorm written to `iteration-N/2-brainstorm.md`. Ready for Research, or want to revise?"
 
 ---
 
@@ -102,9 +102,9 @@ If they choose B, invoke `superpowers:brainstorming`. After it completes, synthe
 
 **Verify your own claims.** You sometimes recommend deprecated or nonexistent packages — check before committing.
 
-**Output:** Write `research.md` with: tech stack selection with rationale, dependencies (including security posture), key technical decisions.
+**Output:** Write `3-research.md` with: tech stack selection with rationale, dependencies (including security posture), key technical decisions.
 
-**Gate:** "Research written to `iteration-N/research.md`. Ready for Plan, or want to revise?"
+**Gate:** "Research written to `iteration-N/3-research.md`. Ready for Plan, or want to revise?"
 
 ---
 
@@ -113,10 +113,10 @@ If they choose B, invoke `superpowers:brainstorming`. After it completes, synthe
 **Goal**: Turn research into a concrete, ordered build sequence.
 
 **Superpowers option:** If `superpowers:writing-plans` is available, offer the user a choice:
-> **A)** Use the built-in Plan phase — lighter, produces `plan.md`
+> **A)** Use the built-in Plan phase — lighter, produces `4-plan.md`
 > **B)** Go deep with `superpowers:writing-plans` — formal implementation plan with bite-sized tasks, TDD, and acceptance criteria
 
-If they choose B, invoke `superpowers:writing-plans`. After it completes, synthesize results into `plan.md` in the iteration directory before advancing.
+If they choose B, invoke `superpowers:writing-plans`. After it completes, synthesize results into `4-plan.md` in the iteration directory before advancing.
 
 **Activities:**
 - Define the file structure for the project
@@ -130,9 +130,9 @@ If they choose B, invoke `superpowers:writing-plans`. After it completes, synthe
 - If any single step would take more than an hour, break it into smaller steps
 - The plan is a living document — update it if execution reveals problems
 
-**Output:** Write `plan.md` with: file structure, build sequence, testing strategy, acceptance criteria checklist.
+**Output:** Write `4-plan.md` with: file structure, build sequence, testing strategy, acceptance criteria checklist.
 
-**Gate:** "Plan written to `iteration-N/plan.md`. Ready for Execute, or want to revise?"
+**Gate:** "Plan written to `iteration-N/4-plan.md`. Ready for Execute, or want to revise?"
 
 ---
 
@@ -144,7 +144,7 @@ If they choose B, invoke `superpowers:writing-plans`. After it completes, synthe
 > **A)** Use the built-in Execute phase — work through the plan step by step
 > **B)** Go deep with `superpowers:executing-plans` — structured execution with review checkpoints
 
-If they choose B, invoke `superpowers:executing-plans`. After it completes, synthesize results into `execute.md` in the iteration directory before advancing.
+If they choose B, invoke `superpowers:executing-plans`. After it completes, synthesize results into `5-execute.md` in the iteration directory before advancing.
 
 **Activities:**
 - Work through the build sequence step by step
@@ -154,7 +154,7 @@ If they choose B, invoke `superpowers:executing-plans`. After it completes, synt
 
 **Test early and often** — smoke testing catches bugs that you miss. If something doesn't work, describe the error precisely: "This function returns X but I expected Y."
 
-**Output:** Write `execute.md` with: summary of what was built, bugs found and fixed, acceptance criteria results.
+**Output:** Write `5-execute.md` with: summary of what was built, bugs found and fixed, acceptance criteria results.
 
 **Gate:** "Execution complete. Ready for Verify, or want to revise?"
 
@@ -167,10 +167,10 @@ If they choose B, invoke `superpowers:executing-plans`. After it completes, synt
 This phase exists because Execute self-reports its own results. Verify is the adversarial counterpart — assume the result has problems and check.
 
 **Superpowers option:** If `superpowers:verification-before-completion` is available, offer the user a choice:
-> **A)** Use the built-in Verify phase — run tests, check criteria, produce `verify.md`
+> **A)** Use the built-in Verify phase — run tests, check criteria, produce `6-verify.md`
 > **B)** Go deep with `superpowers:verification-before-completion` — structured verification with evidence requirements
 
-If they choose B, invoke `superpowers:verification-before-completion`. After it completes, synthesize results into `verify.md` in the iteration directory before advancing.
+If they choose B, invoke `superpowers:verification-before-completion`. After it completes, synthesize results into `6-verify.md` in the iteration directory before advancing.
 
 **Activities:**
 - Run the full test suite and record results — don't trust prior Execute output
@@ -181,7 +181,7 @@ If they choose B, invoke `superpowers:verification-before-completion`. After it 
 
 **If verification fails:** Do not mark the iteration complete. Either return to Execute to fix issues, or note failures for the next iteration's Review/Reflect phase.
 
-**Output:** Write `verify.md` with: test results, acceptance criteria pass/fail with evidence, security check results, and any issues found.
+**Output:** Write `6-verify.md` with: test results, acceptance criteria pass/fail with evidence, security check results, and any issues found.
 
 **Gate:** "Verification complete. Iteration N finished." (Only if all acceptance criteria pass. Otherwise: "Verification found issues — return to Execute, or carry forward to next iteration?")
 
