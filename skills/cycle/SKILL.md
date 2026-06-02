@@ -11,7 +11,9 @@ Work through each phase in order, producing a markdown file for each. Phases can
 
 ## On Invocation
 
-1. Ask the user for a **working directory**. Propose `workspace/cycle/` as default; accept any override.
+1. Ask the user for a **working directory**, accepting any override. Choose the proposed default by project type:
+   - **llm-dev-managed project** (an `.archive/` directory exists at the project root): propose `.archive/cycle-artifacts/`, co-locating cycle artifacts with session notes, transcripts, and handoffs.
+   - **Any other project**: propose `llm-dev-artifacts/` at the project root.
 2. Determine the next iteration number by checking for existing `iteration-N/` directories. Create `iteration-N/` in the working directory.
 3. Create a TodoWrite checklist (or if TodoWrite is unavailable, maintain a markdown checklist in the iteration directory):
 
