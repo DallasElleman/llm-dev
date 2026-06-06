@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 VALID_STATUSES = ("active", "paused", "archived")
-STREAM_HEADING_RE = re.compile(r'^## Streams\s*$', re.MULTILINE)
+STREAM_HEADING_RE = re.compile(r'^## Streams[ \t]*$', re.MULTILINE)
 NEXT_HEADING_RE = re.compile(r'^## ', re.MULTILINE)
 EXPECTED_COLUMNS = (
     "Slug", "Name", "Status", "Claim", "Since", "Last Touched", "Last Handoff",
