@@ -30,6 +30,21 @@ python3 "${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-project.py" "$@"
 - `--path PATH` - Target directory (default: cwd/project_name)
 - `--description DESC` - Project description (or will prompt)
 - `--dry-run` - Preview without making changes
+- `--from-clone URL` - Onboard an existing remote by cloning it into a new container
+- `--in-place` - Force the legacy single-directory layout instead of the container
+
+## Layout
+
+For a **brand-new project** (target dir absent or empty), `/init-project` creates the
+**bare-repo container layout** — `<project>/.bare` (git database), `<project>/streams/main/`
+(the product worktree), and `<project>/.archive/` (the `llm-dev-archive` worktree holding
+session records). This keeps records branch-independent.
+
+- `--from-clone <url>` — onboard an existing remote by cloning it into a new container.
+- `--in-place` — force the legacy single-directory layout instead of the container.
+
+**Existing non-empty directories** keep the legacy in-place layout (converting an existing
+repo to the container is a separate, future step).
 
 ## Execution
 

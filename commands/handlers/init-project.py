@@ -13,6 +13,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import _archive
+
 
 def get_plugin_root() -> Path:
     """Get the plugin root directory from environment or relative path"""
@@ -340,46 +342,130 @@ def phase3_create_project_structure(info: dict, template_path: Path, dry_run: bo
     print()
 
 
+def is_new_project(path: Path) -> bool:
+    """True if `path` is a brand-new project target (absent, or an empty dir)."""
+    p = Path(path)
+    if not p.exists():
+        return True
+    if p.is_dir():
+        return not any(p.iterdir())
+    return False
+
+
+def _replacements_for(info: dict) -> dict:
+    """Build the placeholder->value map used to fill template files."""
+    repl = {
+        '{{PROJECT_NAME}}': info['project_name'],
+        '{{PROJECT_DESCRIPTION}}': info['description'],
+        '{{TODAY_YYYY_MM_DD}}': datetime.now().strftime('%Y-%m-%d'),
+    }
+    if info.get('workspace_path'):
+        repl['{{workspace-path}}'] = info['workspace_path']
+    return repl
+
+
+def _replace_placeholders_in(root: Path, replacements: dict) -> int:
+    """Replace placeholders in every *.md under `root`. Returns files changed."""
+    changed = 0
+    for md_file in Path(root).rglob("*.md"):
+        try:
+            content = md_file.read_text(encoding='utf-8')
+            new_content = content
+            for placeholder, value in replacements.items():
+                new_content = new_content.replace(placeholder, value)
+            if new_content != content:
+                md_file.write_text(new_content, encoding='utf-8')
+                changed += 1
+        except Exception as e:
+            print(f"Warning: Failed to process {md_file}: {e}", file=sys.stderr)
+    return changed
+
+
+def _copy_into(src_dir: Path, dest_dir: Path, skip: set[str] = frozenset()) -> None:
+    """Copy each entry of src_dir into dest_dir (dirs merged), skipping names in `skip`."""
+    for item in Path(src_dir).iterdir():
+        if item.name in skip:
+            continue
+        dest = Path(dest_dir) / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, dest)
+
+
+def build_container_project(container: Path, template_path: Path,
+                            replacements: dict, dry_run: bool) -> None:
+    """Create a new bare-repo container project from the template.
+
+    Product template files go to `streams/main/` (committed on main); the
+    template's `.archive/` content goes to the `.archive/` worktree (committed
+    on llm-dev-archive). Placeholders are filled in both worktrees.
+    """
+    container = Path(container)
+    if dry_run:
+        print(f"[DRY RUN] Would create container at {container}:")
+        print(f"[DRY RUN]   .bare/ (bare repo), .git (pointer)")
+        print(f"[DRY RUN]   streams/main/ (product template, branch main)")
+        print(f"[DRY RUN]   .archive/ (archive template, branch llm-dev-archive)")
+        return
+
+    _archive.bootstrap_greenfield(container)
+    main_wt = container / "streams" / "main"
+    archive_wt = container / ".archive"
+
+    # Product files -> streams/main (everything except the template's .archive)
+    _copy_into(template_path, main_wt, skip={".archive", ".git"})
+    (main_wt / ".claude").mkdir(exist_ok=True)
+    # Archive content -> .archive worktree (merges over the skeleton)
+    tmpl_archive = Path(template_path) / ".archive"
+    if tmpl_archive.is_dir():
+        _copy_into(tmpl_archive, archive_wt)
+
+    # Fill placeholders in both worktrees
+    _replace_placeholders_in(main_wt, replacements)
+    _replace_placeholders_in(archive_wt, replacements)
+
+    # Commit product on main, archive on llm-dev-archive
+    subprocess.run(["git", "add", "-A"], cwd=str(main_wt), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Add llm-dev project template"],
+                   cwd=str(main_wt), check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(archive_wt), check=True, capture_output=True)
+    if subprocess.run(["git", "diff", "--cached", "--quiet"],
+                      cwd=str(archive_wt)).returncode != 0:
+        subprocess.run(["git", "commit", "-m", "Seed llm-dev archive from template"],
+                       cwd=str(archive_wt), check=True, capture_output=True)
+    print(f"Created container project at {container}")
+
+
+def clone_container_project(container: Path, url: str, dry_run: bool) -> None:
+    """Clone an existing remote into a new container (onboarding an existing project)."""
+    container = Path(container)
+    if dry_run:
+        print(f"[DRY RUN] Would clone {url} into container at {container}")
+        return
+    if not is_new_project(container):
+        raise ValueError(f"--from-clone target already exists and is not empty: {container}")
+    _archive.bootstrap_from_clone(container, url)
+    # bootstrap_from_clone sets upstream on llm-dev-archive; set it on main too.
+    main_wt = container / "streams" / "main"
+    subprocess.run(["git", "branch", "--set-upstream-to=origin/main", "main"],
+                   cwd=str(main_wt), check=False, capture_output=True)
+    print(f"Cloned container project into {container}")
+
+
 def phase4_replace_placeholders(info: dict, dry_run: bool) -> None:
     """Phase 4: Replace placeholders in template files"""
     print("=== Phase 4: Replace Placeholders ===\n")
 
     project_path = info['project_path']
-
-    replacements = {
-        '{{PROJECT_NAME}}': info['project_name'],
-        '{{PROJECT_DESCRIPTION}}': info['description'],
-        '{{TODAY_YYYY_MM_DD}}': datetime.now().strftime('%Y-%m-%d'),
-    }
-
-    if info['workspace_path']:
-        replacements['{{workspace-path}}'] = info['workspace_path']
+    replacements = _replacements_for(info)
 
     if dry_run:
         print("[DRY RUN] Would replace placeholders in all .md files:")
         for placeholder, value in replacements.items():
             print(f"  {placeholder} -> {value}")
     else:
-        # Find all markdown files
-        md_files = list(project_path.rglob("*.md"))
-
-        replaced_count = 0
-        for md_file in md_files:
-            try:
-                content = md_file.read_text(encoding='utf-8')
-                original_content = content
-
-                for placeholder, value in replacements.items():
-                    content = content.replace(placeholder, value)
-
-                if content != original_content:
-                    md_file.write_text(content, encoding='utf-8')
-                    replaced_count += 1
-                    print(f"Updated: {md_file.relative_to(project_path)}")
-
-            except Exception as e:
-                print(f"Warning: Failed to process {md_file}: {e}", file=sys.stderr)
-
+        replaced_count = _replace_placeholders_in(project_path, replacements)
         print(f"\nReplaced placeholders in {replaced_count} file(s)")
 
     print()
@@ -521,6 +607,23 @@ def phase7_summary(info: dict) -> None:
     print()
 
 
+def _summary_container(info: dict) -> None:
+    """Print a summary for the bare-repo container layout."""
+    project_path = info['project_path']
+    print("=== Summary ===\n")
+    print(f"Container project created at: {project_path}")
+    print("\nStructure:")
+    print(f"  {info['project_name']}/")
+    print(f"    .bare/            (git database)")
+    print(f"    streams/main/     (product worktree, branch main)")
+    print(f"    .archive/         (session records, branch llm-dev-archive)")
+    print("\nNext steps:")
+    print(f"  1. cd {project_path / 'streams' / 'main'}")
+    print(f"  2. Review and customize CLAUDE.md")
+    print(f"  3. Run /llm-dev:init-session to start tracking conversations")
+    print()
+
+
 def find_remaining_placeholders(project_path: Path) -> list:
     """Find any remaining {{PLACEHOLDER}} values in markdown files"""
     placeholders = []
@@ -560,8 +663,16 @@ def main() -> int:
         action='store_true',
         help="Preview without making changes"
     )
+    parser.add_argument('--from-clone', metavar='URL',
+                        help="Clone an existing remote into a container at <project-name> (uses the same name/--path args)")
+    parser.add_argument('--in-place', action='store_true',
+                        help="Force the legacy in-place layout instead of the container layout")
 
     args = parser.parse_args()
+
+    if args.from_clone and args.in_place:
+        print("Error: --from-clone and --in-place are mutually exclusive", file=sys.stderr)
+        return 1
 
     # Get plugin root
     plugin_root = get_plugin_root()
@@ -570,16 +681,29 @@ def main() -> int:
     try:
         info = phase1_gather_information(args)
         template_path = phase2_locate_template(plugin_root)
-        phase3_create_project_structure(info, template_path, args.dry_run)
-        phase4_replace_placeholders(info, args.dry_run)
-        phase5_initialize_archive(info, args.dry_run)
-        phase6_git_setup(info, args.dry_run)
+        project_path = info['project_path']
+
+        if args.from_clone:
+            layout = "container"
+            clone_container_project(project_path, args.from_clone, args.dry_run)
+        elif is_new_project(project_path) and not args.in_place:
+            layout = "container"
+            replacements = _replacements_for(info)
+            build_container_project(project_path, template_path, replacements, args.dry_run)
+        else:
+            layout = "in-place"
+            # Legacy in-place layout (existing non-empty dirs, or --in-place).
+            phase3_create_project_structure(info, template_path, args.dry_run)
+            phase4_replace_placeholders(info, args.dry_run)
+            phase5_initialize_archive(info, args.dry_run)
+            phase6_git_setup(info, args.dry_run)
 
         if args.dry_run:
             print("\n[DRY RUN COMPLETE - No changes were made]\n")
-        else:
+        elif layout == "in-place":
             phase7_summary(info)
-
+        else:
+            _summary_container(info)
         return 0
 
     except Exception as e:

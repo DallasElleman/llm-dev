@@ -35,7 +35,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import _registry as _reg
+import _session
+import _streams
+import _manifest
+import _index_gen
+import _archive
 
 
 def build_transcript_filename(yyyymmdd: str, nnn: str, title_kebab: str,
@@ -135,14 +139,18 @@ def format_index_timestamp(iso_ts: str) -> str:
         return iso_ts
 
 
-def release_claim_for_session(todos_path: Path, slug: str, session_id: str,
-                              new_handoff: str, now_date: str):
-    """Release `slug` if held by `session_id`. Returns the release result;
-    if stolen, the registry is left untouched."""
-    if not todos_path.exists():
-        return _reg.ReleaseResult(released=True)
-    return _reg.release(todos_path, slug=slug, session_id=session_id,
-                        new_handoff=new_handoff, now_date=now_date)
+def release_claim_for_session(archive_dir: Path, slug: str, session_id: str,
+                              new_handoff, now_date: str):
+    """Release `slug` if held by `session_id` (per-stream JSON). Returns the
+    release result; if stolen, the stream file is left untouched."""
+    return _streams.release(archive_dir, slug=slug, session_id=session_id,
+                            new_handoff=new_handoff, now_date=now_date)
+
+
+def is_container_layout(archive_dir: Path) -> bool:
+    """True if archive_dir is the llm-dev-archive worktree of a container
+    (vs an in-place .archive on the current branch)."""
+    return _archive.archive_worktree(archive_dir.parent) is not None
 
 
 def prepend_stolen_note(handoff_body: str, slug: str, actual_holder: str,
@@ -154,12 +162,6 @@ def prepend_stolen_note(handoff_body: str, slug: str, actual_holder: str,
         f"as of {since}.\n\n"
     )
     return note + handoff_body
-
-
-def since_lookup_from_registry(todos_path: Path, slug: str) -> str:
-    r = _reg.parse(todos_path.read_text())
-    s = r.get(slug)
-    return s.since if s and s.since else "unknown"
 
 
 def _pii_review_needed_json(findings: list) -> str:
@@ -282,16 +284,12 @@ class TranscriptGenerator:
         self.stream_slug = stream_slug  # None when this session held no claim
 
         # If --stream wasn't passed, look up whether this session holds any claim
+        # in the per-stream JSON store.
         if not self.stream_slug:
-            todos_path = self.archive_dir.parent / "CURRENT-TODOs.md"
-            if todos_path.exists():
-                try:
-                    registry = _reg.parse(todos_path.read_text())
-                    held = next((s for s in registry.streams if s.claim == self.session_id), None)
-                    if held is not None:
-                        self.stream_slug = held.slug
-                except _reg.RegistryError:
-                    pass  # malformed registry — proceed as free
+            held = next((s for s in _streams.list_streams(self.archive_dir)
+                         if s.claim == self.session_id), None)
+            if held is not None:
+                self.stream_slug = held.slug
 
         transcript_filename = build_transcript_filename(
             self.date_yyyymmdd, self.session_num_padded,
@@ -305,25 +303,8 @@ class TranscriptGenerator:
         self.user_github = self._get_user_github()
 
     def _find_archive_dir(self) -> Path | None:
-        """Find .archive/transcripts directory by traversing up from cwd.
-
-        Only returns archive directories at or below the current working
-        directory to prevent accidentally modifying a parent project's archive.
-        """
-        cwd = Path.cwd().resolve()
-        current = cwd
-        while current != current.parent:
-            archive_path = current / ".archive" / "transcripts"
-            if archive_path.is_dir():
-                # Verify the archive is within the cwd (not a parent project)
-                try:
-                    current.relative_to(cwd)
-                except ValueError:
-                    current = current.parent
-                    continue
-                return current / ".archive"
-            current = current.parent
-        return None
+        """Resolve the .archive dir for both layouts via the shared resolver."""
+        return _archive.resolve_archive_dir(Path.cwd())
 
     def _read_current_version(self) -> Version:
         """Read the latest semver version from CHANGELOG.md.
@@ -367,8 +348,10 @@ class TranscriptGenerator:
             except Exception:
                 pass
 
-        # Fall back to most recent JSONL (non-agent)
-        return self._find_most_recent_jsonl()
+        # Fall back to the scoped resolver (same encoding as init-session).
+        # Supersedes _find_most_recent_jsonl (a divergent global rglob).
+        sid = _session.find_session_id(Path.cwd())
+        return None if sid == "unknown" else sid
 
     def _find_most_recent_jsonl(self) -> str | None:
         """Find most recent non-agent JSONL file modified in last 60 minutes."""
@@ -798,48 +781,55 @@ class TranscriptGenerator:
             else:
                 json.dump(transcript, f, indent=2, ensure_ascii=False)
 
+    def finalize_manifest(self, transcript: dict) -> Path:
+        """Locate this session's in-progress manifest (by session_id) and
+        finalize it: ended_at, status=complete, title, conversation_id, model,
+        contributor, and the files map. If no manifest exists (e.g. a session
+        started under the old handler), synthesize one keyed on conversation_id.
+        """
+        match = None
+        for m in _manifest.iter_manifests(self.archive_dir):
+            if m.get("session_id") and m.get("session_id") == self.session_id:
+                match = m
+                break
+        date = self.date_yyyymmdd
+        if match is None:
+            match = {
+                "session_id": self.session_id, "number": self.session_num,
+                "stream": self.stream_slug, "started_at": transcript.get("started_at"),
+                "date": f"{date[:4]}-{date[4:6]}-{date[6:]}",
+                "files": {},
+            }
+        assistant = next((p for p in transcript.get("participants", [])
+                          if p.get("role") == "assistant"), {})
+        notes_rel = build_session_doc_filename(date, self.session_num_padded,
+                                               "session-notes.md", self.stream_slug)
+        handoff_rel = build_session_doc_filename(date, self.session_num_padded,
+                                                 "session-handoff.md", self.stream_slug)
+        handoff_abs = self.archive_dir / "session-handoff" / handoff_rel
+        match.update({
+            "title": self.title,
+            "ended_at": _manifest.normalize_ts(transcript.get("ended_at")),
+            "started_at": _manifest.normalize_ts(
+                match.get("started_at") or transcript.get("started_at")),
+            "status": "complete",
+            "model": self.model or assistant.get("model"),
+            "contributor": self.user_github or self.user_name,
+            "conversation_id": self.conversation_id,
+            "files": {
+                "transcript": f"transcripts/{self.conversation_id}.json",
+                "notes": f"session-notes/{notes_rel}",
+                "handoff": (f"session-handoff/{handoff_rel}"
+                            if handoff_abs.exists() else None),
+            },
+        })
+        dirname = f"{date}-{self.session_id}" if match.get("session_id") else self.conversation_id
+        return _manifest.write_manifest(self.archive_dir, dirname, match)
+
     def update_index(self, transcript: dict) -> None:
-        """Update _index.md by replacing placeholder with actual entry."""
-        if not self.index_path.exists():
-            print(f"Warning: Index not found at {self.index_path}")
-            return
-
-        # Extract values from transcript
-        topics = ', '.join(transcript['summary']['topics'])
-        outcomes = '; '.join(transcript['summary']['outcomes'])
-        assistant = [p for p in transcript['participants'] if p['role'] == 'assistant'][0]
-        model_display = f"{assistant['name']} ({assistant['model']})"
-
-        # Format user display (handle missing github username)
-        if self.user_github:
-            user_display = f"{self.user_name} (@{self.user_github})"
-        else:
-            user_display = self.user_name
-
-        _date_iso = getattr(self, 'date_iso', '')
-        started_disp = format_index_timestamp(transcript.get('started_at', _date_iso))
-        ended_disp = format_index_timestamp(transcript.get('ended_at', _date_iso))
-
-        # Build README entry
-        readme_entry = f"""### {self.session_num_padded} - {self.title}
-**File**: {self.conversation_id}.json
-**Started**: {started_disp}
-**Ended**: {ended_disp}
-**Participants**: {user_display}, {model_display}
-**Topics**: {topics}
-**Outcomes**: {outcomes}"""
-
-        # Read current content
-        content = self.index_path.read_text(encoding='utf-8')
-
-        # Pattern to match the placeholder entry (including Session line)
-        pattern = rf'### {self.session_num_padded} - \[In Progress\]\n\*\*File\*\*:.*?\n\*\*Started\*\*:.*?\n\*\*Ended\*\*:.*?\n\*\*Participants\*\*:.*?\n(\*\*Session\*\*:.*?\n)?\*\*Topics\*\*:.*?\n\*\*Outcomes\*\*:.*?(?=\n\n|\n##|\Z)'
-
-        # Replace placeholder
-        new_content = re.sub(pattern, readme_entry, content, flags=re.DOTALL)
-
-        # Write back
-        self.index_path.write_text(new_content, encoding='utf-8')
+        """Regenerate the derived index from manifests (replaces the legacy
+        placeholder-replacement regex)."""
+        _index_gen.write_index(self.archive_dir)
 
     def _format_changelog_entry(self, transcript: dict) -> str:
         """Format changelog entry using proper Types of Changes categories.
@@ -1045,9 +1035,14 @@ class TranscriptGenerator:
         print()
 
     def _is_git_repo(self) -> bool:
-        """Check if project directory is a git repository."""
-        git_dir = self.project_dir / ".git"
-        return git_dir.exists() and git_dir.is_dir()
+        """Check if project directory is a git repository.
+
+        Accepts both a `.git` directory (normal in-place repo) and a `.git`
+        gitdir FILE (the bare-repo container root, whose `.git` is the pointer
+        `gitdir: ./.bare`). Requiring `is_dir()` here silently skipped the
+        entire container-layout commit path.
+        """
+        return (self.project_dir / ".git").exists()
 
     def _git_commit_transcripts(self) -> None:
         """Auto-commit transcript, index, changelog, session-notes, and handoff."""
@@ -1104,61 +1099,85 @@ class TranscriptGenerator:
                     file=sys.stderr,
                 )
 
+            # Finalized session manifest (written by finalize_manifest in run()).
+            manifest_dir = (self.archive_dir / "sessions"
+                            / f"{self.date_yyyymmdd}-{self.session_id}")
+            if not (manifest_dir / "manifest.json").exists():
+                # Synthesized (no UUID) manifests key on conversation_id.
+                manifest_dir = self.archive_dir / "sessions" / self.conversation_id
+            manifest_file = manifest_dir / "manifest.json"
+            if manifest_file.exists():
+                files_to_commit.append(
+                    str(manifest_file.relative_to(self.project_dir))
+                )
+
             if self.stream_slug:
-                todos_path = self.archive_dir.parent / "CURRENT-TODOs.md"
-                if todos_path.exists():
-                    handoff_rel = session_handoff_path.relative_to(self.archive_dir.parent)
-                    result = release_claim_for_session(
-                        todos_path=todos_path,
-                        slug=self.stream_slug,
-                        session_id=self.session_id,
-                        new_handoff=str(handoff_rel),
-                        now_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                # Only record last_handoff if the handoff file actually exists;
+                # otherwise the next session's prior-context lookup would point
+                # at a nonexistent path.
+                handoff_rel = (str(session_handoff_path.relative_to(self.archive_dir))
+                               if session_handoff_path.exists() else None)
+                result = release_claim_for_session(
+                    archive_dir=self.archive_dir,
+                    slug=self.stream_slug,
+                    session_id=self.session_id,
+                    new_handoff=handoff_rel,
+                    now_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                )
+                # Stage the per-stream JSON whenever release wrote to it.
+                # Stolen claims leave the file untouched, so skip in that case.
+                stream_file = _streams.stream_path(self.archive_dir, self.stream_slug)
+                if not result.stolen and stream_file.exists():
+                    files_to_commit.append(
+                        str(stream_file.relative_to(self.project_dir))
                     )
-                    # Stage CURRENT-TODOs.md whenever release wrote to it.
-                    # Stolen claims leave the file untouched, so skip in that case.
-                    if not result.stolen:
-                        files_to_commit.append(
-                            str(todos_path.relative_to(self.project_dir))
-                        )
-                    if result.stolen and session_handoff_path.exists():
-                        body = session_handoff_path.read_text(encoding="utf-8")
-                        session_handoff_path.write_text(
-                            prepend_stolen_note(
-                                body, slug=self.stream_slug,
-                                actual_holder=result.actual_holder,
-                                since=since_lookup_from_registry(todos_path, self.stream_slug),
-                            ),
-                            encoding="utf-8",
-                        )
-                        print(f"WARNING: Stream `{self.stream_slug}` was reassigned to "
-                              f"{result.actual_holder}; handoff prepended with note.")
-                    elif result.stolen:
-                        print(f"WARNING: Stream `{self.stream_slug}` was reassigned to "
-                              f"{result.actual_holder}, but no handoff file exists to annotate.",
-                              file=sys.stderr)
+                if result.stolen and session_handoff_path.exists():
+                    held = _streams.read_stream(self.archive_dir, self.stream_slug)
+                    body = session_handoff_path.read_text(encoding="utf-8")
+                    session_handoff_path.write_text(
+                        prepend_stolen_note(
+                            body, slug=self.stream_slug,
+                            actual_holder=result.actual_holder,
+                            since=(held.since if held and held.since else "unknown"),
+                        ),
+                        encoding="utf-8",
+                    )
+                    print(f"WARNING: Stream `{self.stream_slug}` was reassigned to "
+                          f"{result.actual_holder}; handoff prepended with note.")
+                elif result.stolen:
+                    print(f"WARNING: Stream `{self.stream_slug}` was reassigned to "
+                          f"{result.actual_holder}, but no handoff file exists to annotate.",
+                          file=sys.stderr)
 
             # Build commit message with date
             commit_message = f"Add transcript for session {self.date_display}"
 
-            # Stage files
-            subprocess.run(
-                ['git', 'add'] + files_to_commit,
-                cwd=str(self.project_dir),
-                check=True,
-                capture_output=True
-            )
-
-            # Commit
-            subprocess.run(
-                ['git', 'commit', '-m', commit_message],
-                cwd=str(self.project_dir),
-                check=True,
-                capture_output=True
-            )
-
-            print(f"\nGit commit successful: {commit_message}")
-            self._git_push()
+            # Route the commit by layout: container → archive_sync (paths
+            # relative to the archive worktree); in-place → git add/commit +
+            # push (paths relative to the project dir).
+            if is_container_layout(self.archive_dir):
+                container_paths = [
+                    str((self.project_dir / p).relative_to(self.archive_dir))
+                    for p in files_to_commit
+                ]
+                _archive.archive_sync(self.archive_dir, container_paths,
+                                      commit_message, push=getattr(self, 'push', True))
+                print(f"\nArchive synced: {commit_message}")
+            else:
+                subprocess.run(
+                    ['git', 'add'] + files_to_commit,
+                    cwd=str(self.project_dir),
+                    check=True,
+                    capture_output=True
+                )
+                subprocess.run(
+                    ['git', 'commit', '-m', commit_message],
+                    cwd=str(self.project_dir),
+                    check=True,
+                    capture_output=True
+                )
+                print(f"\nGit commit successful: {commit_message}")
+                self._git_push()
 
         except subprocess.CalledProcessError as e:
             # Don't fail if git commit fails - just report it
@@ -1278,6 +1297,7 @@ class TranscriptGenerator:
         self.write_transcript(transcript, content_override=content)
         print(f"\nTranscript created: {self.output_file}")
 
+        self.finalize_manifest(transcript)
         self.update_index(transcript)
         print(f"Index updated: {self.index_path}")
 

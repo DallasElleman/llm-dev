@@ -89,11 +89,12 @@ def find_session_jsonl(session_id: str, cwd: Path) -> Path | None:
     """Locate the JSONL file for a given session ID under the encoded-cwd dir.
 
     Claude Code stores per-project sessions in ~/.claude/projects/<encoded-cwd>/.
-    The encoded form replaces slashes with hyphens and prepends a hyphen.
+    The encoded form replaces slashes with hyphens (the leading slash becomes the
+    single leading hyphen).
     """
     if not PROJECTS_DIR.exists():
         return None
-    encoded = "-" + str(cwd.resolve()).replace("/", "-")
+    encoded = str(cwd.resolve()).replace("/", "-")
     candidate = PROJECTS_DIR / encoded / f"{session_id}.jsonl"
     if candidate.exists():
         return candidate
