@@ -113,31 +113,39 @@ next session, then archive this conversation as a JSON transcript.
 
 If the session held a stream claim at end time:
 - Handoff and transcript filenames include the stream slug.
-- The stream's registry row is updated: `Claim` → `unclaimed`,
-  `Since` → `—`, `Last Touched` → now, `Last Handoff` → new path.
+- The stream's `.archive/streams/<slug>.json` file is updated: `claim` →
+  `null`, `since` → `null`, `last_touched` → now, `last_handoff` → new path.
 - If another session reclaimed the stream mid-flow, the handoff body is
-  prepended with a "claim was reassigned" note and the registry row is
-  not modified.
+  prepended with a "claim was reassigned" note and the stream file is
+  left untouched.
 
 If the session was free, today's behavior is preserved: flat filenames
-and no registry interaction.
+and no stream interaction.
 
 ## What the Handler Does Automatically
 
-1. **Finds session ID** — From index placeholder (set by `/init-session`) or most recent JSONL
+1. **Finds session ID** — From the in-progress manifest (written by
+   `/init-session`), falling back to the scoped session resolver
 2. **Converts JSONL** — Claude Code's native format → llm-dev JSON format
 3. **Generates outcomes** — Analyzes conversation for files created/modified
 4. **Scans for PII** — Checks for home paths, names, emails, potential secrets before commit
-5. **Updates index** — Replaces `[In Progress]` placeholder with the actual entry (with **Started** / **Ended** timestamps)
-6. **Updates CHANGELOG** — Adds new entry at top (reverse-chronological)
-7. **Commits the bundle** — Stages and commits transcript + session-notes + session-handoff (warns if handoff is missing)
-8. **Pushes the commit** — Pushes the current branch to its remote by default (best-effort and non-fatal; a missing upstream just warns). Pass `--no-push` to skip.
+5. **Finalizes the manifest** — Sets `ended_at`, `status: complete`, `title`,
+   `conversation_id`, and the `files` map on this session's manifest
+6. **Regenerates the derived index** — `.archive/transcripts/_index.md` is
+   re-rendered from the manifests + per-stream JSON (a build artifact, never
+   hand-edited)
+7. **Updates CHANGELOG** — Adds new entry at top (reverse-chronological)
+8. **Commits the bundle by layout** — container (`.archive/` worktree of
+   `llm-dev-archive`) → archive sync; in-place `.archive/` → `git add`/`commit`
+   on the current branch. Stages transcript + manifest + per-stream JSON +
+   index + CHANGELOG + session-notes + session-handoff (warns if handoff missing).
+9. **Pushes the commit** — Pushes by default (best-effort and non-fatal; a missing upstream just warns). Pass `--no-push` to skip.
 
 ## Arguments
 
 - `conversation-number` — The session number (from `/init-session`)
 - `title` — Brief title, 3-7 words (e.g., "Plugin Development and Testing")
-- `--stream <slug>` — Override stream slug for this session. By default, end-session looks up which stream (if any) is claimed by this session's ID in CURRENT-TODOs.md; pass `--stream` only to force a specific slug or override.
+- `--stream <slug>` — Override stream slug for this session. By default, end-session looks up which stream (if any) is claimed by this session's ID in `.archive/streams/<slug>.json`; pass `--stream` only to force a specific slug or override.
 - `--topics "t1, t2"` — Optional comma-separated topics (auto-generated if omitted)
 - `--no-sanitize` — Disable automatic PII redaction. By default `/end-session` redacts home paths and participant names; pass this to restore the interactive commit/sanitize/abort prompt (or, non-interactively, the `PII_REVIEW_NEEDED` abort). (`--sanitize` is still accepted but redundant.)
 - `--no-push` — Skip pushing the archive commit. By default the handler pushes the current branch to its remote (best-effort; a missing upstream just warns).
@@ -154,8 +162,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/end-session.py 10 "Session Hando
 Verify the output:
 - Handoff file at `.archive/session-handoff/YYYYMMDD-NNN-session-handoff.md`
 - Transcript file in `.archive/transcripts/`
-- Index placeholder replaced with actual entry
+- The session manifest at `.archive/sessions/<dir>/manifest.json` finalized
+  (`status: complete`)
+- The derived `.archive/transcripts/_index.md` regenerated with the entry
 - CHANGELOG has new entry at top
-- All four (transcript + index + CHANGELOG + session-notes + session-handoff) included in the same commit
+- The bundle (transcript + manifest + per-stream JSON + index + CHANGELOG +
+  session-notes + session-handoff) included in the same commit
 
 If the auto-generated outcomes need refinement, edit the transcript JSON directly.

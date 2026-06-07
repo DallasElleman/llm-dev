@@ -10,15 +10,22 @@ Initialize a new conversation session for llm-dev transcript tracking.
 
 ## What This Does
 
-1. Reads the current conversation number from `.archive/transcripts/_index.md`
-2. Increments the conversation number
-3. Adds a placeholder entry to the transcript index
-4. Creates a dated, numbered session notes file at
+1. Derives the friendly conversation number as `max(existing manifest
+   numbers) + 1` (the legacy `**Current**: N` counter is retired)
+2. Writes an **in-progress session manifest** at
+   `.archive/sessions/<YYYYMMDD>-<session-uuid>/manifest.json` — the source of
+   truth for this session (`status: in-progress`, `ended_at: null`)
+3. Creates a dated, numbered session notes file at
    `.archive/session-notes/YYYYMMDD-NNN-session-notes.md` for in-flight
    capture of what worked, lessons learned, mistakes made, and assumptions
    proven wrong
-5. Resolves and prints paths to the **prior session's** transcript, notes,
-   and handoff (if any), so you can pick up the thread
+4. Resolves and prints paths to the **prior session's** transcript, notes,
+   and handoff (if any) via **stream-aware** lookup: the latest *complete*
+   manifest on the selected stream, falling back to the latest cross-stream
+   session (clearly labeled) when the stream has no prior session
+5. **Regenerates** the derived index `.archive/transcripts/_index.md` from the
+   manifests + per-stream JSON (the index is a build artifact, never
+   hand-edited)
 
 ## After Running — Pick Up the Thread
 
@@ -41,11 +48,12 @@ and you can proceed normally.
 
 ## Stream Selection
 
-Run with **neither** `--stream` nor `--no-stream` and the handler is in
-**discovery mode**: it prints `STREAM_SELECTION_NEEDED: <JSON>` (visible
-streams, each with claim status, last handoff, and a one-line `next_action`
-preview) and **exits without initializing anything**. Drive selection like
-this:
+Streams live in per-file JSON at `.archive/streams/<slug>.json` (the legacy
+`## Streams` table in `CURRENT-TODOs.md` is retired). Run with **neither**
+`--stream` nor `--no-stream` and the handler is in **discovery mode**: it
+prints `STREAM_SELECTION_NEEDED: <JSON>` (visible streams, each with claim
+status, last handoff, and a one-line `next_action` preview) and **exits
+without initializing anything**. Drive selection like this:
 
 1. **Discover.** Run the handler with no `--stream`/`--no-stream` flag (see
    Usage). Parse the `STREAM_SELECTION_NEEDED:` JSON from its output.
@@ -84,8 +92,9 @@ chooses to reclaim, re-invoke `--stream <slug> --force-stream --model <id>`.
   alternative discovery source.
 
 The selected stream determines which prior handoff is loaded as resume
-context, whether the notes/handoff/transcript filenames include the stream
-slug, and whether `/end-session` updates the stream's registry row.
+context (stream-aware), whether the notes/handoff/transcript filenames include
+the stream slug, and which `.archive/streams/<slug>.json` file `/end-session`
+releases the claim in.
 
 ## Session Notes (Living Document)
 
@@ -130,12 +139,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py --no-stream --mo
 - `--user USERNAME` - GitHub username for transcript attribution (default: prompts user)
 - `--stream <slug>` - Claim a specific stream non-interactively
 - `--no-stream` - Start a free session without stream selection
-- `--list-streams` - Print the stream registry as JSON and exit (no session init)
+- `--list-streams` - Print the per-stream JSON store as JSON and exit (no session init)
 - `--force-stream` - Skip reclaim confirmation when `--stream` targets a claimed stream
 - `--dry-run` - Show what would be done without modifying files
 - `--project-path PATH` - Explicit project root to search from (default: cwd). Use
   this when running from a parent workspace so the correct project's
-  `.archive/transcripts/_index.md` is targeted instead of the workspace's.
+  `.archive/` is targeted instead of the workspace's.
 
 ## After Running
 
@@ -149,6 +158,8 @@ Report to the user:
 ## Error Handling
 
 If the script fails:
-- Check that `.archive/transcripts/_index.md` exists
-- Verify the index has the expected format with `**Current**: N` field
+- Check that the `.archive/` directory exists (container worktree or in-place
+  `.archive/transcripts/`)
+- The index is a derived artifact — if it looks wrong, it is regenerated from
+  the manifests on the next init/end; do not hand-edit it
 - Suggest running `/init-project` if archive infrastructure is missing

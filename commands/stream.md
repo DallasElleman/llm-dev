@@ -7,9 +7,12 @@ allowed-tools: Bash(*)
 # Stream
 
 Manage the multi-stream session tracking for this project. Streams are
-named, persistent units of work registered in `CURRENT-TODOs.md`. Sessions
-claim one stream (or stay "free") via `/llm-dev:init-session` or
-`/llm-dev:stream join`.
+named, persistent units of work, each stored as its own JSON file at
+`.archive/streams/<slug>.json` (the legacy `## Streams` table in
+`CURRENT-TODOs.md` is retired — it was migrated into per-stream JSON). The
+human-readable stream table is rendered into the derived
+`.archive/transcripts/_index.md`. Sessions claim one stream (or stay "free")
+via `/llm-dev:init-session` or `/llm-dev:stream join`.
 
 ## Subcommands
 
@@ -18,8 +21,9 @@ claim one stream (or stay "free") via `/llm-dev:init-session` or
 - `join <slug>` — claim a stream from inside an in-flight free session. Pass
   `--nnn <N>` with the session number shown by `/llm-dev:init-session` (e.g.
   `join main --nnn 015`) so the correct in-flight notes file is renamed;
-  without it the handler falls back to matching your session id in the
-  transcript index (less reliable when multiple sessions run concurrently).
+  without it the handler falls back to matching your session id against the
+  in-progress session manifests (less reliable when multiple sessions run
+  concurrently).
 - `release` — release this session's stream claim (session becomes free).
 - `pause <slug>` — set status to paused.
 - `resume <slug>` — set status to active.
