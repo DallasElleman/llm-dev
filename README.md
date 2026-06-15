@@ -182,7 +182,7 @@ Each phase produces a markdown file in an iteration directory (`iteration-N/`). 
 - At any phase, parallel agent dispatch can be suggested for independent subtasks
 - Iteration N+1 starts with a Review/Reflect that reads prior iteration outputs and reflects on what changed
 
-See [skills/cycle/SKILL.md](skills/cycle/SKILL.md) for full phase details.
+See [skills/cycle/SKILL.md](skills/cycle/SKILL.md) for full phase details, and [skills/cycle/cycle-vs-superpowers.md](skills/cycle/cycle-vs-superpowers.md) for how `/cycle` compares to the related superpowers skills (brainstorming, writing-plans, executing-plans, verification-before-completion).
 
 ## Session Tracking
 
