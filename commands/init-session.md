@@ -154,6 +154,11 @@ Report to the user:
 - Whether prior-session context was loaded (and which docs)
 - Remind them that at session end, they can run `/end-session` to write the
   handoff and archive the conversation
+- **Surface the rename suggestion.** The handler prints a final
+  `Suggested conversation rename: /rename open-<NNN>-<slug>` line. Relay that
+  `/rename open-<NNN>-<slug>` command to the user verbatim as a ready-to-copy
+  suggestion so the conversation title matches the session number + stream (the
+  `open-` prefix marks the session as in progress; the user may edit the slug).
 
 ## Error Handling
 

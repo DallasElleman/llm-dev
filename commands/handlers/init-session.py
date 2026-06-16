@@ -651,6 +651,16 @@ def main():
     print()
     print("At session end, run /end-session to archive this conversation.")
 
+    # Copy-paste rename suggestion so the conversation title matches the session
+    # number + stream. `open-` marks the session in progress — a manual title
+    # convention (not enforced in code), flipped to `closed-` by hand at session
+    # end. Free sessions fall back to the `free` slug; this is cosmetically
+    # ambiguous with a real stream literally named `free`, but the title is
+    # user-editable so it's benign.
+    rename_slug = selected_slug or "free"
+    print()
+    print(f"Suggested conversation rename: /rename open-{new_num_padded}-{rename_slug}")
+
     return 0
 
 
