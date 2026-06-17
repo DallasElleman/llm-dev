@@ -227,6 +227,10 @@ class TranscriptGenerator:
 
         self.sanitize = kwargs.get('sanitize', False)
         self.push = kwargs.get('push', True)
+        # Re-finalize a session whose manifest is already complete (re-run).
+        self.force = kwargs.get('force', False)
+        # Archive without a session-handoff at the resolved stream slug.
+        self.no_handoff = kwargs.get('no_handoff', False)
 
         # Additional outcome fields
         self.provided_files_modified = kwargs.get('files_modified', '')
@@ -247,9 +251,14 @@ class TranscriptGenerator:
         # Pad session number
         self.session_num_padded = f"{session_num:03d}"
 
-        # Auto-detect session ID if not provided
-        if not self.session_id:
-            self.session_id = self._find_session_id()
+        # Resolve session identity. The session NUMBER (argv) is authoritative —
+        # init-session recorded it in an in-progress manifest. Adopting that
+        # manifest's id/stream (instead of re-deriving the *live* id by file scan)
+        # stays correct even when concurrent same-project conversations would make
+        # the scan resolve a different conversation.
+        self._resolved_manifest = None
+        self._manifest_stream = None
+        self._resolve_identity()
 
         if not self.session_id:
             raise ValueError(
@@ -283,13 +292,17 @@ class TranscriptGenerator:
         self.title_kebab = self._to_kebab_case(title)
         self.stream_slug = stream_slug  # None when this session held no claim
 
-        # If --stream wasn't passed, look up whether this session holds any claim
-        # in the per-stream JSON store.
+        # If --stream wasn't passed, take the stream from the resolved in-progress
+        # manifest (authoritative, survives an already-released/stolen claim);
+        # otherwise fall back to scanning the per-stream JSON store by claim id.
         if not self.stream_slug:
-            held = next((s for s in _streams.list_streams(self.archive_dir)
-                         if s.claim == self.session_id), None)
-            if held is not None:
-                self.stream_slug = held.slug
+            if self._manifest_stream:
+                self.stream_slug = self._manifest_stream
+            else:
+                held = next((s for s in _streams.list_streams(self.archive_dir)
+                             if s.claim == self.session_id), None)
+                if held is not None:
+                    self.stream_slug = held.slug
 
         transcript_filename = build_transcript_filename(
             self.date_yyyymmdd, self.session_num_padded,
@@ -331,6 +344,108 @@ class TranscriptGenerator:
 
         # Default to 0.1.0 if no version found
         return Version(0, 1, 0)
+
+    def _resolve_manifest_by_number(self) -> dict | None:
+        """Return the manifest for this session number, preferring the unique
+        in-progress one. Falls back to a complete manifest for the same number
+        (used by the already-archived guard / `--force` re-finalize). Returns
+        None when no manifest carries this number.
+
+        Raises ValueError if more than one *in-progress* manifest shares the
+        number (ambiguous; init derives the number as max+1 so this shouldn't
+        happen, but we refuse to guess).
+        """
+        def _as_int(v):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
+        matches = [m for m in _manifest.iter_manifests(self.archive_dir)
+                   if _as_int(m.get("number")) == self.session_num]
+        in_progress = [m for m in matches if m.get("status") == "in-progress"]
+        if len(in_progress) > 1:
+            raise ValueError(
+                f"ambiguous: {len(in_progress)} in-progress manifests for "
+                f"session number {self.session_num}; resolve manually"
+            )
+        if in_progress:
+            return in_progress[0]
+        complete = [m for m in matches if m.get("status") == "complete"]
+        return complete[0] if complete else None
+
+    def _resolve_identity(self) -> None:
+        """Set self.session_id (+ _resolved_manifest / _manifest_stream) from the
+        authoritative session number, falling back to the live-id scan only when
+        no manifest records this number. Precedence:
+          1. explicit --session-id (operator override)
+          2. in-progress manifest with number == session_num
+          3. _find_session_id() live scan (back-compat for old-handler sessions)
+        """
+        if self.session_id:
+            return  # explicit override
+
+        mf = self._resolve_manifest_by_number()
+        # A manifest with no usable session_id (malformed / hand-edited) is not
+        # adopted — fall through to the live scan rather than carry a null id.
+        if mf is not None and mf.get("session_id"):
+            if mf.get("status") == "complete" and not self.force and not self.dry_run:
+                raise SystemExit(
+                    f"Session {self.session_num} is already archived "
+                    f"(manifest status=complete). Re-run with --force to re-finalize."
+                )
+            self._resolved_manifest = mf
+            self.session_id = mf.get("session_id")
+            self._manifest_stream = mf.get("stream")
+            # A divergent live-id scan is the concurrency signature behind the
+            # mis-resolution bug — surface it instead of silently masking it.
+            live = self._find_session_id()
+            if live and live != self.session_id:
+                print(
+                    f"\nNote: live session-id scan returned {live!r} but the "
+                    f"manifest for session {self.session_num} records "
+                    f"{self.session_id!r}; trusting the manifest (concurrent "
+                    f"same-project conversations can cause this).",
+                    file=sys.stderr,
+                )
+            return
+
+        # No manifest for this number (e.g. a session started under the old
+        # handler, or a mistyped number) — warn and fall back to the live scan.
+        print(
+            f"\nWarning: no in-progress manifest for session number "
+            f"{self.session_num}; falling back to live session-id resolution.",
+            file=sys.stderr,
+        )
+        self.session_id = self._find_session_id()
+
+    def _check_handoff_present(self) -> None:
+        """Hard-error if no session-handoff exists at the resolved stream slug,
+        so a session can't be archived without a re-entry point. `--no-handoff`
+        downgrades this to a notice (for sessions that intentionally have none).
+        """
+        handoff_path = (
+            self.archive_dir / "session-handoff"
+            / build_session_doc_filename(self.date_yyyymmdd, self.session_num_padded,
+                                         "session-handoff.md", self.stream_slug)
+        )
+        if handoff_path.exists():
+            return
+        rel = handoff_path.relative_to(self.project_dir)
+        if self.no_handoff:
+            print(
+                f"\nNotice: no session-handoff at {rel} (--no-handoff); "
+                f"archiving without a re-entry point.",
+                file=sys.stderr,
+            )
+            return
+        print(
+            f"\nError: no session-handoff file found at {rel} — refusing to "
+            f"archive without a re-entry point. Write the handoff first, or pass "
+            f"--no-handoff to override.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     def _find_session_id(self) -> str | None:
         """Find session ID from index placeholder or most recent JSONL."""
@@ -787,11 +902,14 @@ class TranscriptGenerator:
         contributor, and the files map. If no manifest exists (e.g. a session
         started under the old handler), synthesize one keyed on conversation_id.
         """
-        match = None
-        for m in _manifest.iter_manifests(self.archive_dir):
-            if m.get("session_id") and m.get("session_id") == self.session_id:
-                match = m
-                break
+        # Prefer the manifest resolved by session number (the authoritative one);
+        # fall back to a session-id match (old-handler sessions), else synthesize.
+        match = getattr(self, "_resolved_manifest", None)
+        if match is None:
+            for m in _manifest.iter_manifests(self.archive_dir):
+                if m.get("session_id") and m.get("session_id") == self.session_id:
+                    match = m
+                    break
         date = self.date_yyyymmdd
         if match is None:
             match = {
@@ -1260,6 +1378,10 @@ class TranscriptGenerator:
             print("\n[DRY RUN COMPLETE]")
             return
 
+        # Refuse to archive without a handoff at the resolved slug (before any
+        # writes, so a failure leaves no partial bundle). --no-handoff overrides.
+        self._check_handoff_present()
+
         # Serialize and scan for PII
         content = json.dumps(transcript, indent=2, ensure_ascii=False)
         findings = self._scan_pii(content)
@@ -1408,6 +1530,16 @@ Examples:
         default=None,
         help='Stream slug this session belongs to (default: free)'
     )
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help="Re-finalize even if this session number's manifest is already complete"
+    )
+    parser.add_argument(
+        '--no-handoff',
+        action='store_true',
+        help='Archive without requiring a session-handoff at the resolved stream slug'
+    )
 
     args = parser.parse_args()
 
@@ -1431,6 +1563,8 @@ Examples:
             user=args.user,
             bump_type=bump_type,
             push=not args.no_push,
+            force=args.force,
+            no_handoff=args.no_handoff,
             files_modified=getattr(args, 'files_modified', ''),
             artifacts=getattr(args, 'artifacts', ''),
             decisions=getattr(args, 'decisions', ''),
