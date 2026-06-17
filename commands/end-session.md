@@ -29,7 +29,7 @@ next session, then archive this conversation as a JSON transcript.
    Follow the **Handoff Nudge** section below.
 4. **Run the transcript handler** to archive everything:
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--dry-run]
+   python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--force] [--no-handoff] [--dry-run]
    ```
 
 ## Session Notes Nudge
@@ -124,8 +124,12 @@ and no stream interaction.
 
 ## What the Handler Does Automatically
 
-1. **Finds session ID** — From the in-progress manifest (written by
-   `/init-session`), falling back to the scoped session resolver
+1. **Resolves session identity by number** — Adopts the `session_id` and
+   `stream` from the in-progress manifest whose `number` matches the argv
+   conversation number (written by `/init-session`). This is authoritative and
+   stays correct under concurrent same-project conversations; only when no
+   manifest carries the number does it fall back to the scoped live-id scan
+   (a warning is printed). An explicit `--session-id` overrides both.
 2. **Converts JSONL** — Claude Code's native format → llm-dev JSON format
 3. **Generates outcomes** — Analyzes conversation for files created/modified
 4. **Scans for PII** — Checks for home paths, names, emails, potential secrets before commit
@@ -138,7 +142,8 @@ and no stream interaction.
 8. **Commits the bundle by layout** — container (`.archive/` worktree of
    `llm-dev-archive`) → archive sync; in-place `.archive/` → `git add`/`commit`
    on the current branch. Stages transcript + manifest + per-stream JSON +
-   index + CHANGELOG + session-notes + session-handoff (warns if handoff missing).
+   index + CHANGELOG + session-notes + session-handoff. A missing handoff at the
+   resolved slug is a hard error (pass `--no-handoff` to archive without one).
 9. **Pushes the commit** — Pushes by default (best-effort and non-fatal; a missing upstream just warns). Pass `--no-push` to skip.
 
 ## Arguments
@@ -149,6 +154,8 @@ and no stream interaction.
 - `--topics "t1, t2"` — Optional comma-separated topics (auto-generated if omitted)
 - `--no-sanitize` — Disable automatic PII redaction. By default `/end-session` redacts home paths and participant names; pass this to restore the interactive commit/sanitize/abort prompt (or, non-interactively, the `PII_REVIEW_NEEDED` abort). (`--sanitize` is still accepted but redundant.)
 - `--no-push` — Skip pushing the archive commit. By default the handler pushes the current branch to its remote (best-effort; a missing upstream just warns).
+- `--force` — Re-finalize even if this session number's manifest is already `complete` (a re-run). Without it, an already-archived number is a hard error to prevent silently overwriting a completed manifest.
+- `--no-handoff` — Archive without requiring a session-handoff at the resolved stream slug (downgrades the missing-handoff hard error to a notice).
 - `--dry-run` — Preview without writing files
 
 ## Example
