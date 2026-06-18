@@ -897,10 +897,12 @@ class TranscriptGenerator:
                 json.dump(transcript, f, indent=2, ensure_ascii=False)
 
     def finalize_manifest(self, transcript: dict) -> Path:
-        """Locate this session's in-progress manifest (by session_id) and
-        finalize it: ended_at, status=complete, title, conversation_id, model,
-        contributor, and the files map. If no manifest exists (e.g. a session
-        started under the old handler), synthesize one keyed on conversation_id.
+        """Locate this session's in-progress manifest (the one resolved by
+        session number, else a session-id match) and finalize it: ended_at,
+        status=complete, title, conversation_id, model, contributor (the author's
+        git user.name — see below), and the files map. If no manifest exists
+        (e.g. a session started under the old handler), synthesize one keyed on
+        conversation_id.
         """
         # Prefer the manifest resolved by session number (the authoritative one);
         # fall back to a session-id match (old-handler sessions), else synthesize.
@@ -932,7 +934,12 @@ class TranscriptGenerator:
                 match.get("started_at") or transcript.get("started_at")),
             "status": "complete",
             "model": self.model or assistant.get("model"),
-            "contributor": self.user_github or self.user_name,
+            # Author identity for the trust gate's own-match: git user.name (the
+            # stable per-person id init-session + _trust both key on). NOT
+            # user_github, which _get_user_github derives from the remote OWNER
+            # (the repo-owner org — same for every contributor, so it can't
+            # distinguish authors and would falsely flag own records untrusted).
+            "contributor": self.user_name,
             "conversation_id": self.conversation_id,
             "files": {
                 "transcript": f"transcripts/{self.conversation_id}.json",
