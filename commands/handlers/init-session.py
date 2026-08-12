@@ -36,14 +36,7 @@ def get_git_username() -> str:
 
 def get_model_display_name(model: str) -> str:
     """Convert model ID to display name"""
-    if "sonnet" in model.lower():
-        return f"Claude Sonnet 4.6 ({model})"
-    elif "opus" in model.lower():
-        return f"Claude Opus 4.7 ({model})"
-    elif "haiku" in model.lower():
-        return f"Claude Haiku 4.5 ({model})"
-    else:
-        return f"Claude ({model})"
+    return f"{_session.derive_model_display_name(model)} ({model})"
 
 
 def create_session_notes(

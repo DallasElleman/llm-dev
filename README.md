@@ -5,7 +5,7 @@ A Claude Code plugin for LLM-assisted development workflows.
 ## Overview
 
 **llm-dev** provides:
-- **Slash Commands**: `/init-session`, `/end-session`, `/stream`, `/init-project`, `/init-workspace`
+- **Slash Commands**: `/init-session`, `/end-session`, `/stream`, `/init-project`, `/init-workspace`, `/update-agents-md`, `/research-sweep`
 - **Skills**: `/cycle` — a structured 6-phase development loop (Review/Reflect, Brainstorm, Research, Plan, Execute, Verify)
 - **Project Templates**: Standardized scaffolding for new projects
 - **Workspace Templates**: Multi-project workspace structure
@@ -49,7 +49,7 @@ Add to `.claude/settings.json`:
 
 ## Requirements
 
-- **Python 3.12+**: Required for command handlers (`init-session`, `end-session`, `stream`, `init-project`, `init-workspace`)
+- **Python 3.12+**: Required for command handlers (`init-session`, `end-session`, `stream`, `init-project`, `init-workspace`, `research-sweep`)
 - Works natively on **Windows**, **macOS**, and **Linux**
 - No pip dependencies — standard library only
 - Commands invoke `python3`. On Windows, if `python3` is not recognized, either add it to your PATH or create an alias (e.g., `doskey python3=python $*` in CMD, or `Set-Alias python3 python` in PowerShell)
@@ -166,6 +166,69 @@ Manage work streams within a project. Streams are named, persistent units of wor
 /llm-dev:stream rename web web-platform
 ```
 
+### /update-agents-md
+
+Maintain the project's `AGENTS.md` / `CLAUDE.md` — the file injected into every
+agent session, where a wasted line is a tax paid thousands of times and a wrong
+line is a confident mistake repeated thousands of times.
+
+```
+/llm-dev:update-agents-md [--mode refresh|verify-refs|targeted|audit] [--sections "<list>"] [--list]
+```
+
+Run with no `--mode` and the handler computes calibration facts — staleness,
+size, instruction-bearing line count, a per-section inventory, dangling
+references, current branch vs. the file's deploy-branch claim — prints
+`AUDIT_SCOPE_NEEDED: <JSON>`, and exits without acting. Claude presents the
+scope menu, then re-invokes exactly once with the chosen mode.
+
+| Mode | What it does |
+|---|---|
+| `refresh` | Re-verify volatile assertions (objective, deploy branch, module roles), fix drift, re-date. No subagents. |
+| `verify-refs` | Resolve every path, markdown link, and numeric `§N` anchor; report what's broken. |
+| `targeted` | Apply the audit protocol to specific sections (`--sections`). |
+| `audit` | Full protocol, dispatching one read-only agent per angle. |
+
+**Key behaviors:**
+- The handler owns the arithmetic — agent self-counts are unreliable, so the counts come from the JSON, not a subagent's tally
+- Audits use falsifier-before-search, and `UNVERIFIABLE-here` is a first-class verdict; removal needs evidence, not just age
+- `--restamp` updates the `Last edited` date as a separate mechanical step, run after edits land
+- A full audit is refused from a session that already has the file in context — an agent's copy is a session-start snapshot that subagents inherit, so the only clean channel is to hold the file aside and start a fresh session
+
+### /research-sweep
+
+Parallel, read-only, multi-angle research over a repository, synthesized into
+one evidence-backed report. For "audit this," "review the codebase," "find
+contradictions," "is this ready to ship." **Never modifies the repository** —
+no file writes, no mutating git, no deploys; publishing the report anywhere
+durable is opt-in and asked for explicitly at the end.
+
+```
+/llm-dev:research-sweep [--types t1,t2] [--depth quick|standard|deep] [--publish]
+```
+
+**Discovery-then-single-dispatch** (same pattern as `/init-session`'s stream
+selection):
+1. Run with no `--types` — the handler calibrates the repo itself (LOC by
+   language, module/test counts, 90-day commit activity, branch divergence
+   from the default branch, deploy config, live URL, README entry point) and
+   prints the available research types with a `recommended` flag per type,
+   then exits without dispatching anything.
+2. Claude reports the calibration facts, then presents the seven research
+   types via `AskUserQuestion` (`multiSelect: true`), split into two
+   questions — **code health** (code quality/security/efficiency,
+   dependency & supply chain, accessibility, coherence sweep) and **product
+   & ops** (architecture & product, onboarding, pre-launch readiness) — plus
+   depth and publish-preference questions, all within the tool's 4-option
+   cap.
+3. Claude re-invokes once with `--types <selected slugs>`, dispatching one
+   read-only subagent per sub-domain, verifying findings adversarially, and
+   synthesizing one report.
+
+See [commands/research-sweep.md](commands/research-sweep.md) for the full
+flow and [commands/references/research-sweep/](commands/references/research-sweep/)
+for the quality contract and per-type prompt skeletons.
+
 ## Skills
 
 ### /cycle
@@ -255,12 +318,18 @@ llm-dev/
 │   ├── init-project.md
 │   ├── init-session.md
 │   ├── init-workspace.md
+│   ├── research-sweep.md
 │   ├── stream.md
+│   ├── references/
+│   │   └── research-sweep/
+│   │       ├── report-craft.md
+│   │       └── report-types.md
 │   └── handlers/             # Python command handlers
 │       ├── end-session.py
 │       ├── init-project.py
 │       ├── init-session.py
 │       ├── init-workspace.py
+│       ├── research-sweep.py
 │       └── stream.py
 ├── hooks/                    # Hook configuration
 │   └── hooks.json

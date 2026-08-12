@@ -97,6 +97,26 @@ def resolve_session_date(notes_dir: Path, index_path: Path, nnn: str,
     return fallback
 
 
+def resolve_canonical_date(manifest: dict | None, notes_dir: Path, index_path: Path,
+                           nnn: str, fallback: str) -> str:
+    """Resolve the bundle's canonical YYYYMMDD date prefix.
+
+    The in-progress manifest written by init-session is the single source of
+    truth: it records the date the session actually started. Deriving the date
+    any other way (notes filename, index placeholder, today's clock) can
+    disagree with it — a session spanning midnight, or a JSONL carrying earlier
+    messages, then files its transcript/handoff under a different prefix than
+    the manifest and notes, splitting the archive (issue #80).
+
+    Only sessions that pre-date the manifest flow fall through to
+    `resolve_session_date`.
+    """
+    date = (manifest or {}).get("date") or ""
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        return date.replace("-", "")
+    return resolve_session_date(notes_dir, index_path, nnn, fallback=fallback)
+
+
 def message_span(jsonl_path: Path, fallback: str) -> tuple[str, str]:
     """Return (started_at, ended_at) ISO timestamps from the first and last
     non-meta user/assistant messages in the JSONL. Either end falls back to
@@ -272,11 +292,16 @@ class TranscriptGenerator:
             raise FileNotFoundError(f"Could not find session JSONL: {self.session_id}.jsonl")
 
         # Generate metadata. The canonical session date is the START date
-        # (from the notes file / index placeholder), so a session spanning
-        # midnight still files its whole bundle under one consistent date.
+        # recorded by init-session in the in-progress manifest — the single
+        # source of truth. A session spanning midnight (or a JSONL that carries
+        # earlier messages) can otherwise derive a different date from the notes
+        # file or today's clock, creating a split archive. Fall back to the
+        # notes-file / index-placeholder / today path only for sessions that
+        # pre-date the manifest flow.
         now = datetime.now()
         self.date_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.date_yyyymmdd = resolve_session_date(
+        self.date_yyyymmdd = resolve_canonical_date(
+            self._resolved_manifest,
             self.archive_dir / "session-notes",
             self.index_path,
             self.session_num_padded,
@@ -601,14 +626,7 @@ class TranscriptGenerator:
                 # Extract model info
                 if msg_type == 'assistant' and 'model' in message_obj:
                     model_id = message_obj.get('model')
-                    if 'opus' in model_id.lower():
-                        model_name = 'Claude Opus 4.5'
-                    elif 'sonnet' in model_id.lower():
-                        model_name = 'Claude Sonnet 4.5'
-                    elif 'haiku' in model_id.lower():
-                        model_name = 'Claude Haiku'
-                    else:
-                        model_name = 'Claude'
+                    model_name = _session.derive_model_display_name(model_id)
 
                 # Parse message content
                 message_text, tool_calls = self._parse_message_content(
@@ -949,7 +967,33 @@ class TranscriptGenerator:
             },
         })
         dirname = f"{date}-{self.session_id}" if match.get("session_id") else self.conversation_id
+
+        self._warn_on_split_manifest(dirname)
+
         return _manifest.write_manifest(self.archive_dir, dirname, match)
+
+    def _warn_on_split_manifest(self, dirname: str) -> None:
+        """Split-detection guardrail: if a manifest directory for this session
+        already exists at a DIFFERENT path, writing to `dirname` would orphan it
+        (issue #80). Warn rather than raise — the bundle is still written."""
+        if not self.session_id:
+            return
+        sessions_dir = self.archive_dir / "sessions"
+        if not sessions_dir.is_dir():
+            return
+        for d in sorted(sessions_dir.iterdir()):
+            if (d.is_dir() and d.name != dirname
+                    and d.name.endswith(f"-{self.session_id}")):
+                print(
+                    f"\nWarning: existing manifest directory {d.name!r} for "
+                    f"session {self.session_id!r} differs from the target "
+                    f"directory {dirname!r}. This indicates a date mismatch "
+                    f"between init-session and end-session — the original "
+                    f"in-progress manifest will be orphaned. Inspect "
+                    f".archive/sessions/ and remove the duplicate manually.",
+                    file=sys.stderr,
+                )
+                break
 
     def update_index(self, transcript: dict) -> None:
         """Regenerate the derived index from manifests (replaces the legacy
@@ -1329,6 +1373,51 @@ class TranscriptGenerator:
             print(f"\nWarning: git push failed ({stderr}). "
                   f"Push manually with: git push -u origin {branch}")
 
+    def _assert_bundle_complete(self) -> None:
+        """Post-finalization guardrail: verify exactly one complete manifest for
+        this session_id and that every path in files.{transcript,notes,handoff}
+        exists on disk. Reports problems to stderr without raising."""
+        all_m = _manifest.iter_manifests(self.archive_dir)
+        complete = [m for m in all_m
+                    if m.get("session_id") == self.session_id
+                    and m.get("status") == "complete"]
+        orphaned = [m for m in all_m
+                    if m.get("session_id") == self.session_id
+                    and m.get("status") == "in-progress"]
+
+        if len(complete) != 1:
+            print(
+                f"\nWarning: expected 1 complete manifest for session "
+                f"{self.session_id!r}, found {len(complete)}. "
+                f"Check .archive/sessions/ for duplicates.",
+                file=sys.stderr,
+            )
+        if orphaned:
+            print(
+                f"\nWarning: {len(orphaned)} orphaned in-progress manifest(s) for "
+                f"session {self.session_id!r} still exist in .archive/sessions/. "
+                f"Remove the stale director(ies) to prevent the next init-session "
+                f"from treating this session as still active.",
+                file=sys.stderr,
+            )
+
+        if not complete:
+            return
+
+        files = complete[0].get("files") or {}
+        for key in ("transcript", "notes", "handoff"):
+            rel = files.get(key)
+            if rel is None:
+                continue
+            if not (self.archive_dir / rel).exists():
+                print(
+                    f"\nWarning: finalized manifest references {key} at {rel!r} "
+                    f"but the file does not exist on disk — it will not be "
+                    f"committed. The date prefix in the manifest may not match "
+                    f"the file written by init-session.",
+                    file=sys.stderr,
+                )
+
     def run(self) -> None:
         """Main execution flow."""
         print(f"Creating transcript for conversation {self.session_num_padded}: {self.title}")
@@ -1427,6 +1516,7 @@ class TranscriptGenerator:
         print(f"\nTranscript created: {self.output_file}")
 
         self.finalize_manifest(transcript)
+        self._assert_bundle_complete()
         self.update_index(transcript)
         print(f"Index updated: {self.index_path}")
 
