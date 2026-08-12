@@ -9,6 +9,47 @@ PROJECTS_DIR = Path.home() / ".claude" / "projects"
 RECENT_WINDOW_SECONDS = 300  # files modified within last 5 min are "ours"
 RENAME_RE = re.compile(r'named this session "([^"]+)"')
 
+MODEL_FAMILIES = ('opus', 'sonnet', 'haiku', 'fable')
+
+# Bracketed variant suffix on a model id, e.g. `claude-opus-5[1m]` (the 1M
+# context window build). It qualifies the deployment, not the model version.
+MODEL_VARIANT_RE = re.compile(r'\[[^\]]*\]\s*$')
+
+
+def derive_model_display_name(model_id: str | None) -> str:
+    """Derive a human-readable display name from a Claude model id.
+
+    Parses the family (opus/sonnet/haiku/fable) and version numbers out of
+    ids like `claude-opus-4-8` or `claude-haiku-4-5-20251001` instead of
+    relying on a hand-maintained id->name table that goes stale every time a
+    new model ships. Falls back to the raw id — never a guessed name — when
+    the id doesn't match the known shape.
+    """
+    if not model_id:
+        return 'Claude'
+
+    # Strip a bracketed variant suffix before parsing; leaving it attached to
+    # the last segment makes that segment non-numeric and silently drops the
+    # version (`claude-opus-5[1m]` -> 'Claude Opus' instead of 'Claude Opus 5').
+    normalized = MODEL_VARIANT_RE.sub('', model_id.lower())
+
+    parts = normalized.split('-')
+    if parts and parts[0] == 'claude':
+        parts = parts[1:]
+
+    # Drop a trailing snapshot date suffix, e.g. `...-20251001`.
+    if parts and len(parts[-1]) == 8 and parts[-1].isdigit():
+        parts = parts[:-1]
+
+    family_idx = next((i for i, p in enumerate(parts) if p in MODEL_FAMILIES), None)
+    if family_idx is None:
+        return model_id
+
+    family = parts[family_idx].capitalize()
+    version = '.'.join(p for i, p in enumerate(parts) if i != family_idx and p.isdigit())
+
+    return f'Claude {family} {version}' if version else f'Claude {family}'
+
 
 def find_session_id(cwd: Path | None = None) -> str:
     """Return the current Claude Code session UUID, or 'unknown'.
