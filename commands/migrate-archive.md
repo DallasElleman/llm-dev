@@ -35,11 +35,15 @@ per-stream `.archive/streams/<slug>.json`, and a derived `_index.md`.
 
 ```bash
 # Preview (writes nothing):
-python "${CLAUDE_PLUGIN_ROOT}/commands/handlers/migrate-archive.py" --dry-run
+python3 <llm-dev-plugin-root>/commands/handlers/migrate-archive.py --dry-run
 
 # Apply:
-python "${CLAUDE_PLUGIN_ROOT}/commands/handlers/migrate-archive.py"
+python3 <llm-dev-plugin-root>/commands/handlers/migrate-archive.py
 ```
+
+`<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
+set; otherwise the plugin directory shown in this command's listing. Do not
+expand an empty env var.
 
 The handler always exits 0 and prints a JSON report
 (`{"ok", "dry_run", "manifests", "manifests_written", "streams", "warnings"}`).

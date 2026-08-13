@@ -1,7 +1,8 @@
 ---
 description: Initialize a new LLM session for transcript tracking
 argument-hint: [--model MODEL] [--user USERNAME] [--project-path PATH]
-allowed-tools: Bash(*)
+allowed-tools: Bash(*), run_terminal_command, AskUserQuestion, ask_user_question
+disable-model-invocation: true
 ---
 
 # Initialize LLM Session
@@ -148,27 +149,37 @@ durable observations over play-by-play narration.
 
 ## Usage
 
+`<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
+set in this shell; otherwise the plugin directory shown in this command's
+listing. Do **not** expand an empty env var — that becomes `/commands/handlers/...`.
+Always pass `--model <your model id>` (e.g. `grok-4.6`, `claude-opus-4-7`).
+Pass `--session-id <id>` when you know the harness conversation id (Grok
+UUIDv7 or Claude JSONL stem).
+
 **Step 1 — discover** (no stream flag): the handler prints
 `STREAM_SELECTION_NEEDED` and exits without initializing.
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py $ARGUMENTS
+python3 <llm-dev-plugin-root>/commands/handlers/init-session.py $ARGUMENTS
 ```
 
 **Step 3 — initialize** (after the user picks): re-run with the chosen flag
 and your model id.
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py --stream <slug> --model <your-model-id>
+python3 <llm-dev-plugin-root>/commands/handlers/init-session.py --stream <slug> --model <your-model-id>
 # or, for a free session:
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-session.py --no-stream --model <your-model-id>
+python3 <llm-dev-plugin-root>/commands/handlers/init-session.py --no-stream --model <your-model-id>
 ```
 
 ## Arguments
 
 - `--model MODEL` - LLM model identifier. **Always pass your own model id**
-  (e.g. `claude-opus-4-7`) on the step-3 init call so the session records the
-  correct model; the handler default (`claude-sonnet-4-6`) is only a fallback.
+  (e.g. `grok-4.6`, `claude-opus-4-7`) on the step-3 init call so the session
+  records the correct model; the handler default (`claude-sonnet-4-6`) is only
+  a fallback.
+- `--session-id ID` - Harness conversation id (Grok UUIDv7 or Claude JSONL
+  stem). When omitted, discover a recent Grok main session or Claude JSONL.
 - `--user USERNAME` - GitHub username for transcript attribution (default: prompts user)
 - `--stream <slug>` - Claim a specific stream non-interactively
 - `--no-stream` - Start a free session without stream selection

@@ -463,15 +463,8 @@ def attempt_claim(archive_dir: Path, slug: str, session_id: str, now_iso: str,
 
 
 def _lookup_session_title(session_id: str) -> str | None:
-    """Best-effort title lookup. Searches ~/.claude/projects/*/<id>.jsonl."""
-    if session_id == "unknown":
-        return None
-    p = _session.PROJECTS_DIR
-    if not p.exists():
-        return None
-    for jsonl in p.rglob(f"{session_id}.jsonl"):
-        return _session.find_session_title(jsonl)
-    return None
+    """Best-effort title: Grok summary.json, else Claude /rename JSONL."""
+    return _session.find_session_title_any(session_id, Path.cwd())
 
 
 def _lookup_notes_file_for_holder(archive_dir: Path, slug: str,
@@ -514,6 +507,13 @@ def main():
                         help="Print stream registry as JSON and exit (no session init)")
     parser.add_argument("--force-stream", action="store_true",
                         help="Skip reclaim confirmation when --stream targets a claimed stream")
+    parser.add_argument(
+        "--session-id",
+        default=None,
+        metavar="ID",
+        help="Harness session id (Grok UUIDv7 or Claude JSONL stem). "
+             "When omitted, discover a recent Grok main session or Claude JSONL.",
+    )
     parser.add_argument(
         "--project-path",
         default=None,
@@ -587,11 +587,14 @@ def main():
     # Get model display name
     model_display = get_model_display_name(args.model)
 
-    # Get session ID
-    session_id = _session.find_session_id(Path.cwd())
-    if session_id == "unknown":
-        import os as _os
-        session_id = f"claude-{new_num_padded}-{_os.urandom(3).hex()}"
+    # Get session ID: explicit flag, then live harness discovery, then a
+    # synthetic fallback that is *not* a Claude-shaped id on Grok.
+    if args.session_id:
+        session_id = args.session_id
+    else:
+        session_id = _session.find_session_id(Path.cwd())
+        if session_id == "unknown":
+            session_id = _session.synthetic_session_id(new_num_padded)
 
     print(f"Initializing session: {new_num_padded}")
 

@@ -40,6 +40,7 @@ import _streams
 import _manifest
 import _index_gen
 import _archive
+import _transcript
 
 
 def build_transcript_filename(yyyymmdd: str, nnn: str, title_kebab: str,
@@ -286,10 +287,17 @@ class TranscriptGenerator:
                 "Provide it with --session-id or ensure init-session was run"
             )
 
-        # Find JSONL file
+        # Locate the harness transcript (Grok updates.jsonl or Claude JSONL).
+        # A missing/unsupported source is not a hard error — we still archive
+        # notes + handoff and warn (#84 / #94 honesty: capability-negotiated).
         self.jsonl_path = self._find_jsonl_file()
-        if not self.jsonl_path:
-            raise FileNotFoundError(f"Could not find session JSONL: {self.session_id}.jsonl")
+        self._missing_transcript = self.jsonl_path is None
+        if self._missing_transcript:
+            print(
+                f"\nWarning: no harness transcript for session "
+                f"{self.session_id!r}; archiving notes and handoff only.",
+                file=sys.stderr,
+            )
 
         # Generate metadata. The canonical session date is the START date
         # recorded by init-session in the in-progress manifest — the single
@@ -518,18 +526,27 @@ class TranscriptGenerator:
         return None
 
     def _find_jsonl_file(self) -> Path | None:
-        """Locate session JSONL file in ~/.claude/projects/."""
-        claude_projects = Path.home() / ".claude" / "projects"
-        if not claude_projects.exists():
-            return None
+        """Locate the harness transcript for this session id.
 
-        for project_dir in claude_projects.iterdir():
-            if not project_dir.is_dir():
-                continue
-            jsonl_file = project_dir / f"{self.session_id}.jsonl"
-            if jsonl_file.exists():
-                return jsonl_file
+        Prefers the stored id (Grok session dir or Claude JSONL). If that
+        id is missing — including the synthetic `claude-NNN-hex` minted
+        before Grok discovery existed — fall back to the live harness
+        session for this cwd and warn.
+        """
+        cwd = Path.cwd()
+        found = _session.find_session_source(self.session_id, cwd)
+        if found is not None:
+            return found
 
+        live = _session.detect_harness_context(cwd)
+        if live and live.transcript_path:
+            print(
+                f"\nWarning: stored session id {self.session_id!r} has no "
+                f"transcript on disk; using live {live.harness} session "
+                f"{live.session_id!r}.",
+                file=sys.stderr,
+            )
+            return live.transcript_path
         return None
 
     def _to_kebab_case(self, text: str) -> str:
@@ -595,61 +612,21 @@ class TranscriptGenerator:
         return [item.strip() for item in value.split(',') if item.strip()]
 
     def parse_jsonl(self) -> dict:
-        """Parse JSONL file to structured JSON transcript format."""
-        messages = []
-        model_id = None
-        model_name = None
-        files_created = []
-        files_modified = []
-        tools_used = Counter()
+        """Parse a harness transcript into the llm-dev JSON archive format."""
+        imported = _transcript.import_source(self.jsonl_path, self.date_iso)
+        for warning in imported.warnings:
+            print(f"\nWarning: {warning}", file=sys.stderr)
 
-        with open(self.jsonl_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if not line.strip():
-                    continue
-
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                msg_type = entry.get('type')
-                if msg_type not in ('user', 'assistant'):
-                    continue
-                if entry.get('isMeta'):
-                    continue
-
-                timestamp = entry.get('timestamp', self.date_iso)
-                message_obj = entry.get('message', {})
-                content = message_obj.get('content', '')
-
-                # Extract model info
-                if msg_type == 'assistant' and 'model' in message_obj:
-                    model_id = message_obj.get('model')
-                    model_name = _session.derive_model_display_name(model_id)
-
-                # Parse message content
-                message_text, tool_calls = self._parse_message_content(
-                    content, tools_used, files_created, files_modified
-                )
-
-                # Skip empty messages
-                if not message_text.strip() and not tool_calls:
-                    continue
-
-                msg = {
-                    'speaker': msg_type,
-                    'timestamp': timestamp,
-                    'message': message_text
-                }
-                if msg_type == 'assistant' and tool_calls:
-                    msg['tool_calls'] = tool_calls
-
-                messages.append(msg)
+        messages = imported.messages
+        model_id = imported.model_id
+        model_name = imported.model_name
+        files_created = imported.files_created
+        files_modified = imported.files_modified
+        tools_used = imported.tools_used
 
         # Override model if specified
         if self.model:
-            model_name = self.model
+            model_name = _session.derive_model_display_name(self.model)
             model_id = self.model
 
         # Group consecutive tool-only messages
@@ -678,7 +655,11 @@ class TranscriptGenerator:
                     'changes': 'Modified file'
                 })
 
-        started_at, ended_at = message_span(self.jsonl_path, self.date_iso)
+        if self.jsonl_path and imported.harness == "claude":
+            started_at, ended_at = message_span(self.jsonl_path, self.date_iso)
+        else:
+            started_at = imported.started_at or self.date_iso
+            ended_at = imported.ended_at or self.date_iso
 
         # Build transcript
         transcript = {

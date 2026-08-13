@@ -14,18 +14,12 @@ from datetime import datetime
 from pathlib import Path
 
 
+import _plugin
+
+
 def get_plugin_root() -> Path:
-    """Get the plugin root directory from environment or relative path"""
-    plugin_root = os.environ.get('CLAUDE_PLUGIN_ROOT')
-    if plugin_root:
-        root = Path(plugin_root).resolve()
-    else:
-        # Fallback: handlers/ is inside commands/, which is inside plugin root
-        root = Path(__file__).resolve().parent.parent.parent
-    # Validate that this looks like a real plugin directory
-    if not (root / ".claude-plugin" / "plugin.json").exists():
-        raise ValueError(f"Plugin root does not contain .claude-plugin/plugin.json: {root}")
-    return root
+    """Get the plugin root directory from environment or this file's location."""
+    return _plugin.plugin_root()
 
 
 def validate_workspace_name(name: str) -> bool:

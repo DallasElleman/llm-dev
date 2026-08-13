@@ -1,6 +1,6 @@
 # llm-dev
 
-A Claude Code plugin for LLM-assisted development workflows.
+A plugin for LLM-assisted development workflows on Claude Code and Grok Build.
 
 ## Overview
 
@@ -14,7 +14,23 @@ A Claude Code plugin for LLM-assisted development workflows.
 
 ## Installation
 
-### From Marketplace (recommended)
+### Grok Build
+
+```bash
+grok plugin marketplace add DallasElleman/llm-dev
+grok plugin install llm-dev --trust
+```
+
+Local dogfood (this tree or a clone) — avoid enabling both this and the Claude-cache copy at once:
+
+```bash
+grok plugin install /path/to/llm-dev --trust
+# or add the directory to [plugins].paths in ~/.grok/config.toml
+```
+
+Grok indexes `.grok-plugin/marketplace.json`. A plugin `source` of `"./"` (the Claude catalog form) is dropped; this repo's Grok catalog uses a git `url` source so `grok plugin list --json --available` can list `llm-dev` after the marketplace is added. Cold install from a local tree still works via `grok plugin install /path --trust`.
+
+### Claude Code marketplace (recommended)
 
 1. In Claude Code, run `/plugins`
 2. Select **Marketplaces** → **Add Marketplace**

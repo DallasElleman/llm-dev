@@ -1,7 +1,7 @@
 ---
 description: Parallel, read-only, multi-angle research over a repository, synthesized into one evidence-backed report
 argument-hint: [--types t1,t2] [--depth quick|standard|deep] [--publish]
-allowed-tools: Bash(*), Read, Grep, Glob, Task, AskUserQuestion, SendUserFile
+allowed-tools: Bash(*), run_terminal_command, Read, read_file, Grep, grep, Glob, Task, spawn_subagent, AskUserQuestion, ask_user_question
 ---
 
 # Research Sweep
@@ -43,8 +43,12 @@ calibration facts and prints `RESEARCH_TYPES_NEEDED: <JSON>`, then exits
 without dispatching anything.
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/research-sweep.py $ARGUMENTS
+python3 <llm-dev-plugin-root>/commands/handlers/research-sweep.py $ARGUMENTS
 ```
+
+`<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
+set; otherwise the plugin directory shown in this command's listing. Do not
+expand an empty env var.
 
 **Step 3 — dispatch once** (after the user picks): re-run with the chosen
 types. The handler prints `RESEARCH_SWEEP_PLAN: <JSON>` — the selected
@@ -52,7 +56,7 @@ types' sub-domains and the same calibration facts — and still dispatches
 nothing itself; you do the fan-out.
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/research-sweep.py --types <slug1,slug2> --depth <depth> [--publish]
+python3 <llm-dev-plugin-root>/commands/handlers/research-sweep.py --types <slug1,slug2> --depth <depth> [--publish]
 ```
 
 ## Step 2 — Present With `AskUserQuestion`
@@ -94,12 +98,12 @@ re-prompt unless the combined selection across both questions is empty.
 
 Depth and publish are asked directly. The rest have defaults; the automatic
 **Other** free-text box is where a user overrides them (e.g. *"2,6 deep, 8
-agents, sonnet"*).
+agents, grok-4.6"*).
 
 | Setting | Default | Notes |
 |---|---|---|
 | Max concurrent subagents | **20** | Hard cap on one dispatch wave; batch if the plan exceeds it (`agent_count.exceeds_cap` in the plan JSON) |
-| Model | **opus** | `opus` / `sonnet` / `haiku`. Sonnet is acceptable for dependency and onboarding sweeps; use opus for code-quality, architecture, and coherence |
+| Model | **grok-4.6** | Pass `model` on `spawn_subagent` (`grok-4.6` / `grok-4.5`). On Claude Code, use the host's current model unless the user names one. Do not pick opus/sonnet/haiku as a Grok default. |
 | Depth | **standard** | `quick` = merge each type into 1 agent · `standard` = all sub-domains · `deep` = sub-domains + the extra angles listed per type |
 | Adversarial pass | **on** | A skeptic agent per report, prompted to refute. Turn off only if the user asks |
 
@@ -123,8 +127,14 @@ type's `report_types_section`, and give **every** prompt:
 it: *"7 types × sub-domains = 31 agents, then 7 verifiers. Proceed?"* If
 `exceeds_cap` is true, batch the waves and say so.
 
-Launch every agent for a wave **in a single message** so they run concurrently.
-Never launch one, wait, then launch the next.
+Launch every agent for a wave **in a single message** so they run concurrently
+(`spawn_subagent` on Grok, `Task` on Claude Code). Never launch one, wait,
+then launch the next.
+
+On Grok, `explore` is read-only and **has no shell** — do not put calibration
+that needs `wc`/`git` on that type. Use `spawn_subagent` with
+`capability_mode: "read-only"` for research agents. The host already ran
+calibration; agents should not re-run `wc`/`git`.
 
 Order the waves so types producing reusable facts run first — `code-quality-security`
 and `coherence-sweep` tend to seed the others.
@@ -170,7 +180,8 @@ is one.
 
 1. Write the report to the scratchpad directory (never the repo). Name it
    `<repo>-<type>-<date>.md`.
-2. Send it with `SendUserFile`.
+2. Tell the user the scratchpad path so they can open the file. Do not use
+   `SendUserFile` (not available on Grok).
 3. Summarize inline: the verdict, the 3–5 findings that matter, and anything you
    could not verify.
 4. **Then ask** whether to file a GitHub issue, and with which framing —
