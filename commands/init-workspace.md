@@ -1,7 +1,7 @@
 ---
 description: Initialize a new workspace for multi-project llm-dev management
 argument-hint: <workspace-name> [--path PATH]
-allowed-tools: Bash(*), Read, Write, Glob, Edit
+allowed-tools: Bash(*), run_terminal_command, Read, read_file, Write, Glob, Edit, search_replace
 ---
 
 # Initialize New Workspace
@@ -27,8 +27,12 @@ If workspace name not provided, ask the user for:
 Run the init-workspace handler:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-workspace.py" "$@"
+python3 <llm-dev-plugin-root>/commands/handlers/init-workspace.py "$@"
 ```
+
+`<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
+set; otherwise the plugin directory shown in this command's listing. Do not
+expand an empty env var.
 
 **Arguments**:
 - `<workspace-name>` - Workspace name (or will prompt)
@@ -52,7 +56,7 @@ The handler implements all 7 phases:
 
 Execute:
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-workspace.py" "$@"
+python3 <llm-dev-plugin-root>/commands/handlers/init-workspace.py "$@"
 ```
 
 ## Phase 7: Summary

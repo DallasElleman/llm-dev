@@ -1,5 +1,4 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "llm-dev",
   "description": "LLM-assisted development workflow automation",
   "owner": {
@@ -15,8 +14,10 @@
         "name": "Dallas Elleman",
         "email": "dallas@evolver.chat"
       },
-      "source": "./",
-      "skills": ["./skills/cycle"],
+      "source": {
+        "source": "url",
+        "url": "https://github.com/DallasElleman/llm-dev.git"
+      },
       "category": "development",
       "homepage": "https://github.com/DallasElleman/llm-dev"
     }

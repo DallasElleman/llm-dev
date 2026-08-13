@@ -157,7 +157,11 @@ def main(argv: list[str] | None = None) -> int:
     p_join.add_argument("--nnn", default=None,
                         help="Session number from /llm-dev:init-session "
                              "(e.g. 015). Used to find the in-flight notes file.")
-    sub.add_parser("release", help="Release this session's stream claim")
+    p_join.add_argument("--session-id", default=None,
+                        help="Harness session id (default: live Grok/Claude discovery)")
+    p_release = sub.add_parser("release", help="Release this session's stream claim")
+    p_release.add_argument("--session-id", default=None,
+                           help="Harness session id (default: live Grok/Claude discovery)")
 
     args = parser.parse_args(argv)
     archive_dir = _resolve_archive(Path.cwd())
@@ -181,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "rename":
         return cmd_rename(archive_dir, old_slug=args.old_slug, new_slug=args.new_slug)
     if args.cmd == "join":
-        session_id = _session.find_session_id(Path.cwd())
+        session_id = args.session_id or _session.find_session_id(Path.cwd())
         notes_dir = archive_dir / "session-notes"
         nnn = args.nnn or _detect_inflight_nnn(archive_dir, session_id)
         if nnn is None:
@@ -194,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                         notes_dir=notes_dir,
                         now_iso=datetime.now().strftime("%Y-%m-%dT%H:%MZ"))
     if args.cmd == "release":
-        session_id = _session.find_session_id(Path.cwd())
+        session_id = args.session_id or _session.find_session_id(Path.cwd())
         held = next((s for s in _streams.list_streams(archive_dir)
                      if s.claim == session_id), None)
         if held is None:

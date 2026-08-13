@@ -1,7 +1,7 @@
 ---
 description: Maintain a project's AGENTS.md/CLAUDE.md — freshness check or full audit
 argument-hint: [--mode refresh|verify-refs|targeted|audit] [--sections "<list>"] [--list]
-allowed-tools: Bash(*), Read, Edit, Task, AskUserQuestion
+allowed-tools: Bash(*), run_terminal_command, Read, read_file, Edit, search_replace, Task, spawn_subagent, AskUserQuestion, ask_user_question
 ---
 
 # Update AGENTS.md / CLAUDE.md
@@ -18,8 +18,12 @@ Run with **no** `--mode` flag. The handler does **not** act: it computes the
 calibration facts and prints `AUDIT_SCOPE_NEEDED: <JSON>`, then exits.
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/update-agents-md.py $ARGUMENTS
+python3 <llm-dev-plugin-root>/commands/handlers/update-agents-md.py $ARGUMENTS
 ```
+
+`<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
+set; otherwise the plugin directory shown in this command's listing. Do not
+expand an empty env var.
 
 The JSON carries the facts that make the scope choice meaningful:
 `last_edited` date and `days_stale`, total lines/chars, an
@@ -70,18 +74,18 @@ Map the answer to a single re-invocation:
 
 ```bash
 # Refresh
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/update-agents-md.py --mode refresh
+python3 <llm-dev-plugin-root>/commands/handlers/update-agents-md.py --mode refresh
 # ... make the edits directly with Edit, then re-date:
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/update-agents-md.py --mode refresh --restamp
+python3 <llm-dev-plugin-root>/commands/handlers/update-agents-md.py --mode refresh --restamp
 
 # Verify references
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/update-agents-md.py --mode verify-refs
+python3 <llm-dev-plugin-root>/commands/handlers/update-agents-md.py --mode verify-refs
 
 # Targeted audit
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/update-agents-md.py --mode targeted --sections "Deploy Workflow, Known Risks"
+python3 <llm-dev-plugin-root>/commands/handlers/update-agents-md.py --mode targeted --sections "Deploy Workflow, Known Risks"
 
 # Full audit
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/update-agents-md.py --mode audit
+python3 <llm-dev-plugin-root>/commands/handlers/update-agents-md.py --mode audit
 ```
 
 "Other" free text: an existing section name → `--mode targeted --sections

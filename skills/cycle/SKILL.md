@@ -1,6 +1,7 @@
 ---
 name: cycle
 description: Use when starting a development task that needs structured thinking before coding — especially greenfield features, unfamiliar domains, or tasks where jumping straight to implementation would likely require rework. Invoke at the start of work, not mid-task.
+disable-model-invocation: true
 ---
 
 # Development Cycle
@@ -15,7 +16,7 @@ Work through each phase in order, producing a markdown file for each. Phases can
    - **llm-dev-managed project** (an `.archive/` directory exists at the project root): propose `.archive/cycle-artifacts/`, co-locating cycle artifacts with session notes, transcripts, and handoffs.
    - **Any other project**: propose `llm-dev-artifacts/` at the project root.
 2. Determine the next iteration number by checking for existing `iteration-N/` directories. Create `iteration-N/` in the working directory.
-3. Create a TodoWrite checklist (or if TodoWrite is unavailable, maintain a markdown checklist in the iteration directory):
+3. Create a todo checklist (`todo_write` / `TodoWrite`, or a markdown checklist in the iteration directory if neither tool is available):
 
 | Phase | Output |
 |-------|--------|
@@ -65,7 +66,7 @@ This phase is a **dialogue, not a monologue**. Ask questions, challenge assumpti
 > **A)** Use the built-in Brainstorm phase — lighter, produces `2-brainstorm.md`
 > **B)** Go deep with `superpowers:brainstorming` — visual companion, structured spec workflow
 
-If they choose B, invoke `superpowers:brainstorming`. After it completes, synthesize results into `2-brainstorm.md` in the iteration directory before advancing.
+If they choose B, invoke `superpowers:brainstorming`. After it completes, synthesize results into `2-brainstorm.md` in the iteration directory before advancing. On Grok, Superpowers path B is a no-op unless those skills are installed and remapped (`/design` is the closest built-in stand-in — do not pretend Superpowers ran).
 
 **Process:**
 - Start with open-ended questions — understand intent before proposing solutions
@@ -118,7 +119,7 @@ If they choose B, invoke `superpowers:brainstorming`. After it completes, synthe
 > **A)** Use the built-in Plan phase — lighter, produces `4-plan.md`
 > **B)** Go deep with `superpowers:writing-plans` — formal implementation plan with bite-sized tasks, TDD, and acceptance criteria
 
-If they choose B, invoke `superpowers:writing-plans`. After it completes, synthesize results into `4-plan.md` in the iteration directory before advancing.
+If they choose B, invoke `superpowers:writing-plans`. After it completes, synthesize results into `4-plan.md` in the iteration directory before advancing. On Grok, skip B unless Superpowers is actually installed.
 
 **Activities:**
 - Define the file structure for the project
@@ -146,7 +147,7 @@ If they choose B, invoke `superpowers:writing-plans`. After it completes, synthe
 > **A)** Use the built-in Execute phase — work through the plan step by step
 > **B)** Go deep with `superpowers:executing-plans` — structured execution with review checkpoints
 
-If they choose B, invoke `superpowers:executing-plans`. After it completes, synthesize results into `5-execute.md` in the iteration directory before advancing.
+If they choose B, invoke `superpowers:executing-plans`. After it completes, synthesize results into `5-execute.md` in the iteration directory before advancing. On Grok, skip B unless Superpowers is actually installed.
 
 **Activities:**
 - Work through the build sequence step by step
@@ -172,7 +173,7 @@ This phase exists because Execute self-reports its own results. Verify is the ad
 > **A)** Use the built-in Verify phase — run tests, check criteria, produce `6-verify.md`
 > **B)** Go deep with `superpowers:verification-before-completion` — structured verification with evidence requirements
 
-If they choose B, invoke `superpowers:verification-before-completion`. After it completes, synthesize results into `6-verify.md` in the iteration directory before advancing.
+If they choose B, invoke `superpowers:verification-before-completion`. After it completes, synthesize results into `6-verify.md` in the iteration directory before advancing. On Grok, skip B unless Superpowers is actually installed.
 
 **Activities:**
 - Run the full test suite and record results — don't trust prior Execute output
@@ -200,11 +201,11 @@ Phase gates are **guided, not rigid**. Present the gate prompt and wait for the 
 | "revise" | Stay in current phase, continue working |
 | "back" / "back to [phase]" | Return to a previous phase |
 
-Update the TodoWrite checklist as each phase completes or is skipped.
+Update the todo checklist as each phase completes or is skipped.
 
 ## Parallel Agent Dispatch
 
-At any phase, if the work involves 2+ independent subtasks, suggest dispatching parallel agents using the Agent tool. This is a suggestion — the user can decline.
+At any phase, if the work involves 2+ independent subtasks, suggest dispatching parallel agents (`spawn_subagent` on Grok, `Agent` / `Task` on Claude Code). This is a suggestion — the user can decline.
 
 Examples:
 - **Review/Reflect**: Loading and summarizing multiple independent documents

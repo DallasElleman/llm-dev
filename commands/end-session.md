@@ -1,7 +1,8 @@
 ---
 description: End an LLM session — write handoff doc and archive transcript
 argument-hint: <conversation-number> "<title>" [--topics "t1, t2"]
-allowed-tools: Bash(*)
+allowed-tools: Bash(*), run_terminal_command, Read, read_file, Write, search_replace
+disable-model-invocation: true
 ---
 
 # End Session
@@ -9,7 +10,7 @@ allowed-tools: Bash(*)
 Wind the session down. Write a forward-looking **session handoff** for the
 next session, then archive this conversation as a JSON transcript.
 
-## Flow (you, Claude, perform these in order)
+## Flow (you, the session agent, perform these in order)
 
 1. **Finalize the session notes.** Before writing the handoff, do a final pass
    on this session's notes file (`.archive/session-notes/{date_yyyymmdd}-{NNN}-*-session-notes.md`):
@@ -29,8 +30,12 @@ next session, then archive this conversation as a JSON transcript.
    Follow the **Handoff Nudge** section below.
 4. **Run the transcript handler** to archive everything:
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--force] [--no-handoff] [--dry-run]
+   python3 <llm-dev-plugin-root>/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--force] [--no-handoff] [--dry-run]
    ```
+
+   `<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
+   set; otherwise the plugin directory shown in this command's listing. Do
+   not expand an empty env var.
 
 ## Session Notes Nudge
 
@@ -56,7 +61,7 @@ next session, then archive this conversation as a JSON transcript.
 > Alright — good place to wind the session down. Let's write a handoff
 > document for the next session.
 >
-> The audience is a fresh Claude instance picking up this thread cold. Your
+> The audience is a fresh agent instance picking up this thread cold. Your
 > job is to help them retain and resume the progress made here without
 > losing the thread. Try to include only high-signal context toward that
 > end. This document is the next session's high-signal **re-entry point**.
@@ -99,7 +104,7 @@ next session, then archive this conversation as a JSON transcript.
 > 8. **Gotchas** — specific traps in the *current* work-in-flight (not
 >    generalized lessons).
 > 9. **First Action for Next Session** — write this as an instruction the
->    next Claude will read at the top of `/init-session`. Format:
+>    next agent will read at the top of `/init-session`. Format:
 >    *"Start by reading X, Y, and Z. Then greet the user, relay your
 >    understanding of where we left off, and ask whether anything has
 >    changed since the last session or whether we should resume where we
@@ -130,7 +135,9 @@ and no stream interaction.
    stays correct under concurrent same-project conversations; only when no
    manifest carries the number does it fall back to the scoped live-id scan
    (a warning is printed). An explicit `--session-id` overrides both.
-2. **Converts JSONL** — Claude Code's native format → llm-dev JSON format
+2. **Converts the harness transcript** — Claude Code JSONL or Grok
+   `updates.jsonl` → llm-dev JSON. If no supported transcript is found,
+   archives notes + handoff with a warning and an empty dialogue.
 3. **Generates outcomes** — Analyzes conversation for files created/modified
 4. **Scans for PII** — Checks for home paths, names, emails, potential secrets before commit
 5. **Finalizes the manifest** — Sets `ended_at`, `status: complete`, `title`,
@@ -161,7 +168,7 @@ and no stream interaction.
 ## Example
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/commands/handlers/end-session.py 10 "Session Handoff Feature" --topics "session-handoff, end-session, plugin"
+python3 <llm-dev-plugin-root>/commands/handlers/end-session.py 10 "Session Handoff Feature" --topics "session-handoff, end-session, plugin"
 ```
 
 ## After Running

@@ -1,7 +1,7 @@
 ---
 description: Initialize a new project from llm-dev template
 argument-hint: <project-name> [--path PATH] [--description DESC]
-allowed-tools: Bash(*), Read, Write, Glob, Grep, Edit
+allowed-tools: Bash(*), run_terminal_command, Read, read_file, Write, Glob, Grep, Edit, search_replace
 ---
 
 # Initialize New Project
@@ -22,8 +22,12 @@ If project name not provided, ask the user for:
 Run the init-project handler:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-project.py" "$@"
+python3 <llm-dev-plugin-root>/commands/handlers/init-project.py "$@"
 ```
+
+`<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
+set; otherwise the plugin directory shown in this command's listing. Do not
+expand an empty env var.
 
 **Arguments**:
 - `<project-name>` - Project name (or will prompt)
@@ -62,7 +66,7 @@ The handler implements all 7 phases:
 
 Execute:
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/commands/handlers/init-project.py" "$@"
+python3 <llm-dev-plugin-root>/commands/handlers/init-project.py "$@"
 ```
 
 ## Phase 7: Summary
