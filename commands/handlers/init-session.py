@@ -595,6 +595,25 @@ def main():
         session_id = _session.find_session_id(Path.cwd())
         if session_id == "unknown":
             session_id = _session.synthetic_session_id(new_num_padded)
+        else:
+            # Discovery returns max(mtime) within the recency window. With two
+            # conversations open on the same project both are in the window,
+            # and the winner is whichever last wrote a line — not necessarily
+            # this one. Binding the wrong id here is silent until archive time,
+            # where it yields a plausible archive of the wrong conversation
+            # (issue #98 #1). Say so now, while --session-id is still cheap.
+            recent = _session.recent_claude_session_ids(Path.cwd())
+            if len(recent) > 1:
+                others = ', '.join(recent[1:4])
+                print(
+                    f"\nWARNING: {len(recent)} conversations are active on this "
+                    f"project right now. Session {new_num_padded} was bound to "
+                    f"{session_id!r} because it wrote most recently — that may "
+                    f"not be this conversation. Also active: {others}. If the "
+                    f"archive later looks like someone else's session, re-run "
+                    f"init with --session-id <this conversation's id>.",
+                    file=sys.stderr,
+                )
 
     print(f"Initializing session: {new_num_padded}")
 

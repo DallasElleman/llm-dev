@@ -20,6 +20,9 @@ PROJECTS_DIR = Path.home() / ".claude" / "projects"
 GROK_HOME = Path(os.environ.get("GROK_HOME", Path.home() / ".grok"))
 GROK_SESSIONS_DIR = GROK_HOME / "sessions"
 RECENT_WINDOW_SECONDS = 300  # files modified within last 5 min are "ours"
+# Shortest stored id accepted as a prefix of a real transcript stem. A UUID's
+# first block is 8 hex chars; anything shorter matches too much to be evidence.
+_MIN_PREFIX_LEN = 8
 RENAME_RE = re.compile(r'named this session "([^"]+)"')
 
 MODEL_FAMILIES = ('opus', 'sonnet', 'haiku', 'fable')
@@ -264,6 +267,41 @@ def detect_harness_context(cwd: Path | None = None) -> HarnessContext | None:
     return grok or claude
 
 
+def recent_claude_session_ids(cwd: Path | None = None) -> list[str]:
+    """Every Claude session id active in the recency window for this project,
+    newest first.
+
+    `find_session_id` returns only `max(mtime)`. When two conversations are
+    open on the same project, both sit inside the window and the winner is
+    whichever one last wrote a line — not necessarily the one running the
+    command. That is how a session number gets bound to the wrong
+    conversation (issue #98 #1), and the binding is invisible until archive
+    time. Callers use this to detect the ambiguity and say so.
+    """
+    if not PROJECTS_DIR.exists():
+        return []
+    search_root = PROJECTS_DIR
+    if cwd is not None:
+        proj = PROJECTS_DIR / encode_claude_cwd(cwd)
+        if proj.is_dir():
+            search_root = proj
+    threshold = time.time() - RECENT_WINDOW_SECONDS
+    found: list[tuple[float, str]] = []
+    try:
+        for jsonl in search_root.rglob("*.jsonl"):
+            if jsonl.name.startswith("agent-"):
+                continue
+            try:
+                mtime = jsonl.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= threshold:
+                found.append((mtime, jsonl.stem))
+    except OSError:
+        return []
+    return [sid for _, sid in sorted(found, reverse=True)]
+
+
 def find_session_id(cwd: Path | None = None) -> str:
     """Return the current harness session UUID, or 'unknown'.
 
@@ -329,6 +367,17 @@ def find_session_jsonl(session_id: str, cwd: Path) -> Path | None:
     # Fallback: search anywhere
     for jsonl in PROJECTS_DIR.rglob(f"{session_id}.jsonl"):
         return jsonl
+    # Both lookups above are exact-stem. A stored id that is a *prefix* of the
+    # real stem — a truncated paste, or a job id mistaken for a session id —
+    # therefore misses a file whose name it is a prefix of, and the caller
+    # falls through to substituting whatever session is live. Accept a prefix
+    # only when it identifies exactly one transcript; an ambiguous prefix is
+    # no better than none.
+    if len(session_id) >= _MIN_PREFIX_LEN:
+        hits = [p for p in PROJECTS_DIR.rglob(f"{session_id}*.jsonl")
+                if not p.name.startswith("agent-")]
+        if len(hits) == 1:
+            return hits[0]
     return None
 
 
