@@ -15,7 +15,9 @@ Initialize a new conversation session for llm-dev transcript tracking.
    numbers) + 1` (the legacy `**Current**: N` counter is retired)
 2. Writes an **in-progress session manifest** at
    `.archive/sessions/<YYYYMMDD>-<session-uuid>/manifest.json` — the source of
-   truth for this session (`status: in-progress`, `ended_at: null`)
+   truth for this session (`status: in-progress`, `ended_at: null`,
+   `plugin_version: <the llm-dev version this handler ran from>`, so
+   `/end-session` can warn if the session ends under a different install)
 3. Creates a dated, numbered session notes file at
    `.archive/session-notes/YYYYMMDD-NNN-session-notes.md` for in-flight
    capture of what worked, lessons learned, mistakes made, and assumptions

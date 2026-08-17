@@ -1,8 +1,10 @@
 # Report types — sub-domains and prompt skeletons
 
-Each type lists the sub-domains it fans out into. At **standard** depth dispatch one agent per sub-domain. At **quick**, merge a type's sub-domains into one agent. At **deep**, add the extra angles listed.
-
 Every prompt = the block from `report-craft.md` (read-only constraint + calibration + seeds + method) **plus** the type-specific body below. Adapt the file paths to the project — the examples are illustrative, not fixed.
+
+## Depth levels
+
+Each type lists the sub-domains it fans out into. At **standard** depth dispatch one agent per sub-domain. At **quick**, merge a type's sub-domains into one agent. At **deep**, add the extra angles listed.
 
 ---
 

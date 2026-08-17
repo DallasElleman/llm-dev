@@ -30,7 +30,7 @@ next session, then archive this conversation as a JSON transcript.
    Follow the **Handoff Nudge** section below.
 4. **Run the transcript handler** to archive everything:
    ```bash
-   python3 <llm-dev-plugin-root>/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--force] [--allow-empty] [--no-handoff] [--dry-run]
+   python3 <llm-dev-plugin-root>/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--force] [--allow-empty] [--no-handoff] [--project-path PATH] [--dry-run]
    ```
 
    `<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
@@ -161,9 +161,10 @@ and no stream interaction.
 - `--topics "t1, t2"` — Optional comma-separated topics (auto-generated if omitted)
 - `--no-sanitize` — Disable automatic PII redaction. By default `/end-session` redacts home paths and participant names; pass this to restore the interactive commit/sanitize/abort prompt (or, non-interactively, the `PII_REVIEW_NEEDED` abort). (`--sanitize` is still accepted but redundant.)
 - `--no-push` — Skip pushing the archive commit. By default the handler pushes the current branch to its remote (best-effort; a missing upstream just warns).
-- `--force` — Re-finalize even if this session number's manifest is already `complete` (a re-run). Without it, an already-archived number is a hard error to prevent silently overwriting a completed manifest.
+- `--force` — Re-finalize even if this session number's manifest is already `complete` (a re-run). Without it, an already-archived number is a hard error to prevent silently overwriting a completed manifest. A session that claimed its stream *after* init has no stream on its manifest, and the claim is released by the first run — so a `--force` re-run of one of those also needs an explicit `--stream <slug>`.
 - `--allow-empty` — Archive even when a transcript file was found on disk but imported **zero** dialogue entries. Without it this is a hard error: a file that imports to nothing is the signature of a broken importer, not an empty session (issue #96 shipped precisely because nothing checked). Use it only for a session that genuinely had no dialogue.
 - `--no-handoff` — Archive without requiring a session-handoff at the resolved stream slug (downgrades the missing-handoff hard error to a notice).
+- `--project-path PATH` — Explicit project root to search from (default: cwd). Use this when running from a parent workspace so the correct project's `.archive/` is targeted instead of the workspace's.
 - `--dry-run` — Preview without writing files
 
 ## Example
