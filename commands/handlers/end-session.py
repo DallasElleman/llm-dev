@@ -233,6 +233,12 @@ class Version:
         return f"{self.major}.{self.minor}.{self.patch}"
 
 
+# Shared by _scan_pii and _sanitize_content so the detector and the redactor
+# can never drift apart — a redaction keyed on a different pattern than the
+# scan is how issue #97 shipped.
+EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
+
 class TranscriptGenerator:
     """Generates structured JSON transcripts from Claude Code JSONL sessions."""
 
@@ -250,6 +256,8 @@ class TranscriptGenerator:
         self.push = kwargs.get('push', True)
         # Re-finalize a session whose manifest is already complete (re-run).
         self.force = kwargs.get('force', False)
+        # Archive despite a found-but-empty transcript import (see #96).
+        self.allow_empty = kwargs.get('allow_empty', False)
         # Archive without a session-handoff at the resolved stream slug.
         self.no_handoff = kwargs.get('no_handoff', False)
 
@@ -411,36 +419,50 @@ class TranscriptGenerator:
         """Set self.session_id (+ _resolved_manifest / _manifest_stream) from the
         authoritative session number, falling back to the live-id scan only when
         no manifest records this number. Precedence:
-          1. explicit --session-id (operator override)
-          2. in-progress manifest with number == session_num
+          1. in-progress (or complete, for --force) manifest with number ==
+             session_num — resolved first, even when --session-id is passed
+             explicitly. An explicit override used to skip this entirely,
+             which dropped the manifest's recorded stream (issue #98 #3) and
+             left `finalize_manifest` unable to find the existing manifest by
+             session_id, synthesizing a second `complete` manifest for the
+             same number instead of correcting the original (issue #98 #2).
+          2. explicit --session-id (operator override) — still wins as
+             self.session_id, but the manifest found in (1), if any, is the
+             one corrected and finalized, and its stream still applies.
           3. _find_session_id() live scan (back-compat for old-handler sessions)
         """
-        if self.session_id:
-            return  # explicit override
-
         mf = self._resolve_manifest_by_number()
         # A manifest with no usable session_id (malformed / hand-edited) is not
         # adopted — fall through to the live scan rather than carry a null id.
-        if mf is not None and mf.get("session_id"):
-            if mf.get("status") == "complete" and not self.force and not self.dry_run:
-                raise SystemExit(
-                    f"Session {self.session_num} is already archived "
-                    f"(manifest status=complete). Re-run with --force to re-finalize."
-                )
+        usable = mf is not None and bool(mf.get("session_id"))
+
+        if usable and mf.get("status") == "complete" and not self.force and not self.dry_run:
+            raise SystemExit(
+                f"Session {self.session_num} is already archived "
+                f"(manifest status=complete). Re-run with --force to re-finalize."
+            )
+
+        if self.session_id:
+            if usable:
+                if mf.get("session_id") != self.session_id:
+                    print(
+                        f"\nNote: session {self.session_num}'s manifest recorded "
+                        f"session_id {mf.get('session_id')!r}; correcting it to "
+                        f"the explicit --session-id override {self.session_id!r} "
+                        f"instead of creating a second manifest for this number.",
+                        file=sys.stderr,
+                    )
+                self._resolved_manifest = mf
+                self._manifest_stream = mf.get("stream")
+            return  # explicit override wins as the id either way
+
+        if usable:
             self._resolved_manifest = mf
             self.session_id = mf.get("session_id")
             self._manifest_stream = mf.get("stream")
             # A divergent live-id scan is the concurrency signature behind the
             # mis-resolution bug — surface it instead of silently masking it.
-            live = self._find_session_id()
-            if live and live != self.session_id:
-                print(
-                    f"\nNote: live session-id scan returned {live!r} but the "
-                    f"manifest for session {self.session_num} records "
-                    f"{self.session_id!r}; trusting the manifest (concurrent "
-                    f"same-project conversations can cause this).",
-                    file=sys.stderr,
-                )
+            self._warn_on_live_id_divergence()
             return
 
         # No manifest for this number (e.g. a session started under the old
@@ -451,6 +473,50 @@ class TranscriptGenerator:
             file=sys.stderr,
         )
         self.session_id = self._find_session_id()
+
+    def _warn_on_live_id_divergence(self) -> None:
+        """Compare the live harness scan against the manifest this session
+        number resolved to. A disagreement is the concurrency signature
+        behind issue #98 #1 (init-session can bind a session number to the
+        wrong same-project conversation) — surface concrete mtime evidence
+        loudly rather than a quiet stderr note, since silently trusting a
+        wrong manifest here produces a plausible-looking archive with no
+        error.
+        """
+        live = self._find_session_id()
+        if not live or live == self.session_id:
+            return
+        evidence = ""
+        try:
+            cwd = Path.cwd()
+            manifest_src = _session.find_session_source(self.session_id, cwd)
+            live_src = _session.find_session_source(live, cwd)
+            if manifest_src is not None and live_src is not None:
+                m_mtime = manifest_src.stat().st_mtime
+                l_mtime = live_src.stat().st_mtime
+                m_dt = datetime.fromtimestamp(m_mtime).strftime("%Y-%m-%d %H:%M")
+                l_dt = datetime.fromtimestamp(l_mtime).strftime("%Y-%m-%d %H:%M")
+                evidence = (
+                    f" Manifest id's transcript last modified {m_dt}; live "
+                    f"id's transcript last modified {l_dt}."
+                )
+                if m_mtime < l_mtime:
+                    evidence += (
+                        " The manifest id's transcript is OLDER than the live "
+                        "one — strong evidence init-session bound the wrong "
+                        "conversation to this session number."
+                    )
+        except OSError:
+            pass
+        print(
+            f"\nWARNING: live session-id scan returned {live!r} but the "
+            f"manifest for session {self.session_num} records "
+            f"{self.session_id!r}; trusting the manifest (concurrent "
+            f"same-project conversations can cause this).{evidence} If the "
+            f"archived transcript looks empty or wrong, re-run with "
+            f"--session-id {live!r} --force to correct it.",
+            file=sys.stderr,
+        )
 
     def _check_handoff_present(self) -> None:
         """Hard-error if no session-handoff exists at the resolved stream slug,
@@ -539,9 +605,35 @@ class TranscriptGenerator:
             return found
 
         live = _session.detect_harness_context(cwd)
+
+        # Substituting the live session for a *real* stored id archives some
+        # other conversation under this session's number, then commits and
+        # pushes it — a wrong artifact rather than an empty one, with no error.
+        # Reported by session 122, which resolved a concurrent session's id
+        # this way. The fallback is only legitimate for the synthetic
+        # `claude-NNN-hex` / `grok-NNN-hex` ids minted when no live harness
+        # session existed at init: those never had a transcript of their own,
+        # so there is nothing to mis-attribute away from.
+        if not _session.is_synthetic_session_id(self.session_id):
+            hint = ""
+            if live and live.session_id:
+                hint = (f" The live {live.harness} session here is "
+                        f"{live.session_id!r}; if that is genuinely this "
+                        f"conversation, re-run with "
+                        f"--session-id {live.session_id} --force "
+                        f"--stream <slug>.")
+            print(
+                f"\nError: stored session id {self.session_id!r} has no "
+                f"transcript on disk. Refusing to substitute a different "
+                f"session — that would archive another conversation under "
+                f"session {self.session_num}.{hint}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
         if live and live.transcript_path:
             print(
-                f"\nWarning: stored session id {self.session_id!r} has no "
+                f"\nWarning: synthetic session id {self.session_id!r} has no "
                 f"transcript on disk; using live {live.harness} session "
                 f"{live.session_id!r}.",
                 file=sys.stderr,
@@ -611,11 +703,43 @@ class TranscriptGenerator:
             return []
         return [item.strip() for item in value.split(',') if item.strip()]
 
+    def _guard_empty_import(self, imported) -> None:
+        """Refuse to archive zero dialogue when a transcript file was found.
+
+        Issue #96 shipped because nothing checked this: the run printed
+        `Messages: 0`, `Git commit successful`, `Pushed to remote` and
+        `Done! … archived successfully` over an empty artifact, and it took a
+        human noticing the word "transcript" in a summary to catch it. A
+        genuinely empty session is rare; a file on disk that imported to
+        nothing is almost always a broken importer. Make it loud.
+
+        `--allow-empty` is the escape hatch for the legitimate case (a session
+        with no transcript at all still archives its notes and handoff).
+        """
+        if imported.messages:
+            return
+        src = self.jsonl_path
+        if src is None or not Path(src).exists():
+            return  # nothing found on disk — notes+handoff only, expected
+        if getattr(self, 'allow_empty', False):
+            return
+        print(
+            f"\nError: {self.jsonl_path} exists but imported 0 dialogue "
+            f"entries. Refusing to archive an empty transcript over a "
+            f"transcript file that is sitting on disk — this is the signature "
+            f"of a broken importer, not an empty session. Re-run with "
+            f"--allow-empty if the session really had no dialogue.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     def parse_jsonl(self) -> dict:
         """Parse a harness transcript into the llm-dev JSON archive format."""
         imported = _transcript.import_source(self.jsonl_path, self.date_iso)
         for warning in imported.warnings:
             print(f"\nWarning: {warning}", file=sys.stderr)
+
+        self._guard_empty_import(imported)
 
         messages = imported.messages
         model_id = imported.model_id
@@ -919,6 +1043,13 @@ class TranscriptGenerator:
                 "date": f"{date[:4]}-{date[4:6]}-{date[6:]}",
                 "files": {},
             }
+        # The manifest directory this session number previously resolved to
+        # (if any), computed from the SAME date+session_id convention
+        # init-session uses to name it. Captured before .update() overwrites
+        # session_id below, so an explicit --session-id correction (issue
+        # #98 #2) can be relocated instead of orphaned.
+        old_session_id = match.get("session_id")
+        old_dirname = f"{date}-{old_session_id}" if old_session_id else None
         assistant = next((p for p in transcript.get("participants", [])
                           if p.get("role") == "assistant"), {})
         notes_rel = build_session_doc_filename(date, self.session_num_padded,
@@ -927,6 +1058,7 @@ class TranscriptGenerator:
                                                  "session-handoff.md", self.stream_slug)
         handoff_abs = self.archive_dir / "session-handoff" / handoff_rel
         match.update({
+            "session_id": self.session_id,
             "title": self.title,
             "ended_at": _manifest.normalize_ts(transcript.get("ended_at")),
             "started_at": _manifest.normalize_ts(
@@ -948,6 +1080,16 @@ class TranscriptGenerator:
             },
         })
         dirname = f"{date}-{self.session_id}" if match.get("session_id") else self.conversation_id
+
+        # An explicit --session-id correction changes the manifest's dirname
+        # (date+session_id). Relocate the existing directory in place rather
+        # than writing a fresh one and leaving the original orphaned as a
+        # second `complete` manifest for the same number (issue #98 #2).
+        if old_dirname and old_dirname != dirname:
+            old_path = self.archive_dir / "sessions" / old_dirname
+            new_path = self.archive_dir / "sessions" / dirname
+            if old_path.is_dir() and not new_path.exists():
+                old_path.rename(new_path)
 
         self._warn_on_split_manifest(dirname)
 
@@ -1094,33 +1236,66 @@ class TranscriptGenerator:
     def _scan_pii(self, content: str) -> list[dict]:
         """Scan transcript content for PII patterns.
 
-        Returns a list of findings, each with 'type', 'count', and 'example'.
+        Returns a list of findings, each with 'type', 'count', 'category', and
+        (for pattern-based findings) 'pattern'/'replacement' used to drive
+        `_sanitize_content`. 'category' marks which findings that method is
+        actually able to redact ('home_path', 'participant_name') versus
+        report-only ('email', 'secret').
         """
         findings = []
 
-        # Home directory paths (extract username from pattern)
+        # Home directory paths, both literal (/Users/<user>, /home/<user>) and
+        # the hyphen-encoded form Claude Code uses for its own project dirs
+        # under ~/.claude/projects/ (e.g. -Users-<user>-dev-...). Every distinct
+        # match is redacted via re.sub over the *whole* pattern below — keying
+        # off a single captured username (matches[0]) let any earlier, different
+        # capture (e.g. a truncated example path) silently disarm the rest.
         home_patterns = [
-            (r'/Users/([A-Za-z0-9._\-]+)', 'macOS home path'),
-            (r'/home/([A-Za-z0-9._\-]+)', 'Linux home path'),
-            (r'C:\\\\Users\\\\([A-Za-z0-9._\-]+)', 'Windows home path'),
+            (r'/Users/([A-Za-z0-9._\-]+)', '/Users/<user>', 'macOS home path'),
+            (r'/home/([A-Za-z0-9._\-]+)', '/home/<user>', 'Linux home path'),
+            (r'C:\\\\Users\\\\([A-Za-z0-9._\-]+)', 'C:\\\\Users\\\\<user>', 'Windows home path'),
+            # Hyphen-encoded project dirs (~/.claude/projects/-Users-<user>-...).
+            # The username is the FIRST segment after the prefix, so the class
+            # deliberately excludes '-': a greedy [A-Za-z0-9._\-]+ swallows the
+            # whole encoded path, collapsing -Users-<user>-dev-projects-foo and
+            # -Users-<user>-dev-bar to the same '-Users-<user>' token. That is
+            # not merely lossy — issue #98 and the session-122 report were both
+            # diagnosed *from* these directory names, in transcripts kept
+            # specifically to debug the archiver. Redact the identity, keep the
+            # path. (A username containing a hyphen is still fully redacted, by
+            # the literal pass below, whenever it also appears in slash form.)
+            (r'-Users-([A-Za-z0-9._]+)', '-Users-<user>',
+             'macOS hyphen-encoded home path (project dir)'),
+            (r'-home-([A-Za-z0-9._]+)', '-home-<user>',
+             'Linux hyphen-encoded home path (project dir)'),
         ]
-        for pattern, label in home_patterns:
+        for pattern, replacement, label in home_patterns:
             matches = re.findall(pattern, content)
             if matches:
-                username = matches[0]
                 count = len(matches)
+                usernames = sorted({m if isinstance(m, str) else m[0] for m in matches})
+                # The label is printed to the console by _report_findings. An
+                # unbounded join reprints every captured username and project
+                # path — i.e. the redaction report becomes a listing of the PII
+                # being redacted. Show at most three.
+                shown = ', '.join(usernames[:3])
+                if len(usernames) > 3:
+                    shown += f', +{len(usernames) - 3} more'
                 findings.append({
-                    'type': f'{label} (username: {username})',
+                    'type': f'{label} (username: {shown})',
                     'count': count,
                     'pattern': pattern,
-                    'username': username,
+                    'replacement': replacement,
+                    'category': 'home_path',
+                    'usernames': usernames,
+                    # Kept for callers/tests that inspect a single example
+                    # username; redaction itself uses 'pattern'/'replacement'
+                    # above so it no longer depends on this being complete.
+                    'username': usernames[0],
                 })
 
         # Email addresses
-        email_matches = re.findall(
-            r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
-            content
-        )
+        email_matches = re.findall(EMAIL_PATTERN, content)
         # Filter out known safe emails (Co-Authored-By, noreply)
         email_matches = [e for e in email_matches if 'noreply@' not in e]
         if email_matches:
@@ -1128,6 +1303,15 @@ class TranscriptGenerator:
                 'type': 'email address',
                 'count': len(email_matches),
                 'example': email_matches[0],
+                'category': 'email',
+                # Redacted, not merely reported: --sanitize is the default and
+                # archives are pushed to public repos, so a detected address
+                # that survives the "sanitized" run is the same failure this
+                # issue is about, one category over. `noreply@` addresses are
+                # preserved by the repl below — they are the Co-Authored-By
+                # trailers, and stripping them would corrupt attribution.
+                'pattern': EMAIL_PATTERN,
+                'replacement': '<email>',
             })
 
         # API keys / tokens (high-entropy strings near keywords, handles JSON escaping)
@@ -1138,6 +1322,7 @@ class TranscriptGenerator:
                 'type': 'potential secret/token',
                 'count': len(secret_matches),
                 'example': secret_matches[0][:8] + '...',
+                'category': 'secret',
             })
 
         # Participant name (from self.user_name if not generic)
@@ -1147,30 +1332,99 @@ class TranscriptGenerator:
                 findings.append({
                     'type': f'participant name ("{self.user_name}")',
                     'count': name_count,
+                    'category': 'participant_name',
                 })
 
         return findings
 
     def _sanitize_content(self, content: str, findings: list[dict]) -> str:
-        """Apply redactions to transcript content based on scan findings."""
+        """Apply redactions to transcript content based on scan findings.
+
+        Pattern-based findings (home paths, both literal and hyphen-encoded)
+        are redacted with re.sub over the full pattern, so every occurrence is
+        replaced regardless of which specific capture produced the finding.
+        """
         sanitized = content
 
-        # Replace home directory paths
         for finding in findings:
-            if 'username' in finding:
-                username = finding['username']
-                sanitized = sanitized.replace(f'/Users/{username}', '/Users/<user>')
-                sanitized = sanitized.replace(f'/home/{username}', '/home/<user>')
-                sanitized = sanitized.replace(
-                    f'C:\\\\Users\\\\{username}',
-                    'C:\\\\Users\\\\<user>'
-                )
+            if 'pattern' in finding and 'replacement' in finding:
+                # A literal-string repl (not a callable) would have its own
+                # backslashes reinterpreted as regex backreference escapes by
+                # re.sub — corrupting the doubled backslashes in the
+                # JSON-escaped Windows-path replacement. A lambda's return
+                # value is substituted verbatim, sidestepping that.
+                replacement = finding['replacement']
+                if finding.get('category') == 'email':
+                    # Keep Co-Authored-By / noreply trailers intact; _scan_pii
+                    # excludes them, so redacting them here would make the
+                    # guardrail's re-scan disagree with what was written.
+                    def _repl(m, _r=replacement):
+                        return m.group(0) if 'noreply@' in m.group(0) else _r
+                else:
+                    def _repl(m, _r=replacement):
+                        return _r
+                sanitized = re.sub(finding['pattern'], _repl, sanitized)
+
+        # Hyphen-encoded usernames that contain a '-' are only partially caught
+        # by the anchored pattern above (it stops at the first hyphen). The
+        # slash forms are unambiguous, so any username learned from them is
+        # redacted literally in the encoded form too, tail preserved.
+        for finding in findings:
+            if finding.get('category') != 'home_path':
+                continue
+            for username in finding.get('usernames', ()):
+                if '-' not in username:
+                    continue  # already fully handled by the anchored pattern
+                for prefix, label in (('-Users-', '-Users-<user>'),
+                                      ('-home-', '-home-<user>')):
+                    sanitized = sanitized.replace(f'{prefix}{username}', label)
 
         # Replace participant name
         if self.user_name and self.user_name != 'User':
             sanitized = sanitized.replace(self.user_name, '<user>')
 
         return sanitized
+
+    @staticmethod
+    def _unredacted_note(findings: list[dict]) -> str:
+        """Name the categories `_sanitize_content` never redacts.
+
+        `_scan_pii` detects emails and secrets but only *reports* them, and
+        `_assert_sanitized` excludes them for that reason. Printing a bare
+        "Sanitized." over a scan that found an email address repeats the exact
+        shape of issue #97 one category over: a true statement about work that
+        did not happen. Say what was left.
+        """
+        left = sorted({f['type'] for f in findings
+                       if f.get('category') == 'secret'})
+        if not left:
+            return ""
+        return (f" Not redacted (report-only): {', '.join(left)}."
+                " Review before publishing, or edit the transcript by hand.")
+
+    def _assert_sanitized(self, content: str) -> None:
+        """Post-sanitize guardrail: re-scan the sanitized content and abort
+        loudly if any home-path or participant-name finding survives.
+
+        A redaction step that cannot detect its own no-op is how issue #97
+        shipped: the reported count was correct and the "sanitized" message
+        was printed, but only the first captured username was ever redacted.
+        Emails are enforced here too: they are redacted as of 0.21.2, so a
+        surviving address is a real no-op. Secrets stay excluded and
+        report-only — `_sanitize_content` cannot safely rewrite an arbitrary
+        high-entropy match without risking the surrounding structure.
+        """
+        remaining = [f for f in self._scan_pii(content)
+                     if f.get('category') in ('home_path', 'participant_name',
+                                              'email')]
+        if remaining:
+            self._report_findings(remaining)
+            print(
+                "\nError: sanitize did not remove all PII (see findings above). "
+                "Aborting before write/commit.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     def _report_findings(self, findings: list[dict]) -> None:
         """Print PII scan results."""
@@ -1482,7 +1736,8 @@ class TranscriptGenerator:
                     sys.exit(0)
                 elif response in ('s', 'sanitize'):
                     content = self._sanitize_content(content, findings)
-                    print("Sanitized.")
+                    self._assert_sanitized(content)
+                    print("Sanitized." + self._unredacted_note(findings))
                 # 'c' or 'commit' or empty: proceed as-is
             except (KeyboardInterrupt, EOFError):
                 print("\nAborted by user.")
@@ -1490,7 +1745,9 @@ class TranscriptGenerator:
         elif findings and self.sanitize:
             self._report_findings(findings)
             content = self._sanitize_content(content, findings)
-            print("Auto-sanitized (--sanitize flag).")
+            self._assert_sanitized(content)
+            print("Auto-sanitized (--sanitize flag)."
+                  + self._unredacted_note(findings))
 
         # Write files
         self.write_transcript(transcript, content_override=content)
@@ -1614,6 +1871,12 @@ Examples:
         help="Re-finalize even if this session number's manifest is already complete"
     )
     parser.add_argument(
+        '--allow-empty',
+        action='store_true',
+        help='Archive even when a transcript file was found but imported zero '
+             'dialogue entries (normally a broken importer, not an empty session)'
+    )
+    parser.add_argument(
         '--no-handoff',
         action='store_true',
         help='Archive without requiring a session-handoff at the resolved stream slug'
@@ -1642,6 +1905,7 @@ Examples:
             bump_type=bump_type,
             push=not args.no_push,
             force=args.force,
+            allow_empty=args.allow_empty,
             no_handoff=args.no_handoff,
             files_modified=getattr(args, 'files_modified', ''),
             artifacts=getattr(args, 'artifacts', ''),

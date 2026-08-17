@@ -85,29 +85,41 @@ def _decode_params(raw):
     return {}
 
 
+_CLAUDE_PROBE_SKIP_NAMES = {"updates.jsonl", "chat_history.jsonl", "events.jsonl"}
+_CLAUDE_TURN_TYPES = ("user", "assistant")
+# A real session opens with metadata envelopes (last-prompt, mode,
+# permission-mode, bridge-session, attachment, ...) before the first turn;
+# bound the scan instead of reading an entire multi-MB transcript to answer
+# a yes/no.
+_CLAUDE_PROBE_MAX_LINES = 500
+
+
 class ClaudeJsonlImporter:
     """Claude Code `~/.claude/projects/<hyphen-cwd>/<uuid>.jsonl`."""
 
     def probe(self, source: Path) -> bool:
         if not source.is_file() or source.suffix != ".jsonl":
             return False
-        if source.name in {"updates.jsonl", "chat_history.jsonl", "events.jsonl"}:
+        if source.name in _CLAUDE_PROBE_SKIP_NAMES:
             return False
         try:
             with source.open("r", encoding="utf-8") as f:
-                for line in f:
+                for i, line in enumerate(f):
+                    if i >= _CLAUDE_PROBE_MAX_LINES:
+                        break
                     if not line.strip():
                         continue
                     try:
                         entry = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if entry.get("type") in ("user", "assistant"):
+                    if not isinstance(entry, dict):
+                        continue
+                    if entry.get("type") in _CLAUDE_TURN_TYPES:
                         return True
-                    if entry.get("type"):
-                        # Recognizable Claude envelope even without a turn yet.
-                        return "message" in entry
-                    return False
+                    if entry.get("type") and "message" in entry:
+                        return True
+                    # Otherwise: a metadata envelope — keep scanning.
         except OSError:
             return False
         return False
