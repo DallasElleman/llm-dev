@@ -18,6 +18,7 @@ import _manifest
 import _index_gen
 import _archive
 import _trust
+import _plugin
 
 
 def get_git_username() -> str:
@@ -102,7 +103,13 @@ def write_inprogress_manifest(archive_dir: Path, *, session_id: str, number: int
                               contributor: str, started_at: str, date: str,
                               notes_rel: str | None) -> Path:
     """Write the in-progress session manifest. Directory key is
-    <YYYYMMDD>-<session-uuid> (UUID known at init; title is not yet)."""
+    <YYYYMMDD>-<session-uuid> (UUID known at init; title is not yet).
+
+    `plugin_version` stamps the install these handlers came from, so
+    end-session can tell when a session inits under one plugin version and
+    ends under another. An unreadable plugin manifest stamps null — provenance
+    is a nicety, never a reason to fail an init.
+    """
     dirname = f"{date.replace('-', '')}-{session_id}"
     return _manifest.write_manifest(archive_dir, dirname, {
         "session_id": session_id,
@@ -116,6 +123,7 @@ def write_inprogress_manifest(archive_dir: Path, *, session_id: str, number: int
         "status": "in-progress",
         "conversation_id": None,
         "date": date,
+        "plugin_version": _plugin.plugin_version(),
         "files": {"transcript": None, "notes": notes_rel, "handoff": None},
     })
 

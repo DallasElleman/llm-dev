@@ -23,6 +23,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _plugin
+
+# Bundled reference files, relative to the plugin root.
+REFERENCE_SUBPATH = ("commands", "references", "research-sweep")
+
 LANGUAGE_EXTENSIONS = {
     ".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript",
     ".ts": "TypeScript", ".tsx": "TypeScript", ".go": "Go", ".rs": "Rust",
@@ -50,7 +57,7 @@ MANIFEST_FILES = (
 
 URL_RE = re.compile(r"https?://[^\s)>\"']+")
 
-# Sub-domain ids and labels mirror `references/research-sweep/report-types.md`
+# Sub-domain ids and labels mirror `commands/references/research-sweep/report-types.md`
 # exactly — the handler emits them, and the agent prompts are built from the
 # matching section of that file. If they drift, the dispatch plan names
 # sub-domains whose prompt skeletons don't exist.
@@ -375,7 +382,33 @@ def _types_needed_payload(calibration: dict) -> dict:
     }
 
 
+def reference_dir() -> Path:
+    """Absolute path to the bundled research-sweep reference files.
+
+    The dispatch plan is consumed by an agent whose cwd is the *user's*
+    project, so a project-relative reference path never resolves and the
+    quality contract silently drops out of the sweep. Resolve against the
+    installed plugin root instead, falling back to this file's own location
+    (dev checkout, or a plugin root that doesn't carry the references) so the
+    emitted path is always absolute and points at real files when they exist.
+    """
+    roots = []
+    try:
+        roots.append(_plugin.plugin_root())
+    except ValueError:
+        pass
+    roots.append(Path(__file__).resolve().parent.parent.parent)
+    for root in roots:
+        candidate = root.joinpath(*REFERENCE_SUBPATH)
+        if candidate.is_dir():
+            return candidate
+    return roots[-1].joinpath(*REFERENCE_SUBPATH)
+
+
 def _sweep_plan_payload(calibration: dict, types: list[str], depth: str, publish: bool) -> dict:
+    references = reference_dir()
+    report_craft = references / "report-craft.md"
+    report_types = references / "report-types.md"
     return {
         "calibration": calibration,
         "depth": depth,
@@ -393,17 +426,21 @@ def _sweep_plan_payload(calibration: dict, types: list[str], depth: str, publish
         ],
         "agent_count": _planned_agent_count(types, depth),
         "max_concurrent_agents": MAX_CONCURRENT_AGENTS,
+        "reference_paths": {
+            "report_craft": str(report_craft),
+            "report_types": str(report_types),
+        },
         "instruction": (
             "For each sub-domain across the selected types, fan out one "
             "read-only subagent carrying the quality contract from "
-            "commands/references/research-sweep/report-craft.md and the "
+            f"{report_craft} and the "
             "matching prompt skeleton from "
-            "commands/references/research-sweep/report-types.md, filled in "
+            f"{report_types}, filled in "
             "with these calibration facts. At 'quick' depth, run only the top "
             "2 sub-domains per type by relevance to the calibration facts; at "
             "'deep' depth, add a second adversarial verification pass on "
             "every finding (not just high-severity ones). Verify adversarially "
-            "per report-craft.md, then synthesize one report per its "
+            f"per {report_craft}, then synthesize one report per its "
             "synthesis rules. Never write files, run mutating git commands, or "
             "deploy anything. The report goes to the scratchpad; ask "
             "explicitly before publishing it anywhere durable, even if "

@@ -41,6 +41,7 @@ import _manifest
 import _index_gen
 import _archive
 import _transcript
+import _plugin
 
 
 def build_transcript_filename(yyyymmdd: str, nnn: str, title_kebab: str,
@@ -260,6 +261,10 @@ class TranscriptGenerator:
         self.allow_empty = kwargs.get('allow_empty', False)
         # Archive without a session-handoff at the resolved stream slug.
         self.no_handoff = kwargs.get('no_handoff', False)
+        # Explicit project root (`--project-path`), so end-session can be run
+        # from a parent workspace like init-session / research-sweep /
+        # update-agents-md. None means "use cwd" (the historical behavior).
+        self.project_path = kwargs.get('project_path')
 
         # Additional outcome fields
         self.provided_files_modified = kwargs.get('files_modified', '')
@@ -288,6 +293,7 @@ class TranscriptGenerator:
         self._resolved_manifest = None
         self._manifest_stream = None
         self._resolve_identity()
+        self._warn_on_plugin_version_drift()
 
         if not self.session_id:
             raise ValueError(
@@ -356,9 +362,15 @@ class TranscriptGenerator:
         self.user_name = self._get_user_name()
         self.user_github = self._get_user_github()
 
+    def _start_dir(self) -> Path:
+        """Project root every path/session lookup starts from: `--project-path`
+        when given, else cwd. Mirrors init-session's `start_dir`."""
+        raw = getattr(self, "project_path", None)
+        return Path(raw).resolve() if raw else Path.cwd()
+
     def _find_archive_dir(self) -> Path | None:
         """Resolve the .archive dir for both layouts via the shared resolver."""
-        return _archive.resolve_archive_dir(Path.cwd())
+        return _archive.resolve_archive_dir(self._start_dir())
 
     def _read_current_version(self) -> Version:
         """Read the latest semver version from CHANGELOG.md.
@@ -488,7 +500,7 @@ class TranscriptGenerator:
             return
         evidence = ""
         try:
-            cwd = Path.cwd()
+            cwd = self._start_dir()
             manifest_src = _session.find_session_source(self.session_id, cwd)
             live_src = _session.find_session_source(live, cwd)
             if manifest_src is not None and live_src is not None:
@@ -518,6 +530,57 @@ class TranscriptGenerator:
             file=sys.stderr,
         )
 
+    def _warn_on_plugin_version_drift(self) -> None:
+        """Non-fatal notice when the plugin install ending this session is not
+        the one that inited it.
+
+        init-session stamps `plugin_version` into the manifest. A session can
+        init from one install and end from another — ASWP session 122 inited
+        from `plugins/marketplaces/…` and ended from `plugins/cache/…/0.21.0/`
+        — which silently mixes two generations of handler behavior across one
+        archive. Manifests written before the stamp existed carry no key; stay
+        quiet for those rather than warning on every historical session.
+        """
+        manifest = getattr(self, "_resolved_manifest", None) or {}
+        inited = manifest.get("plugin_version")
+        ending = _plugin.plugin_version()
+        if not inited or not ending or inited == ending:
+            return
+        print(
+            f"\nWarning: session {self.session_num} was inited under llm-dev "
+            f"plugin {inited} but is ending under {ending} — handlers may have "
+            f"changed mid-session. Check the archived output before trusting it.",
+            file=sys.stderr,
+        )
+
+    def _missing_handoff_stream_hint(self) -> str:
+        """Hint for a missing handoff when no stream slug resolved.
+
+        A session that claimed a stream after init has no stream on its
+        manifest, so the slug comes from the live claim — and a re-run (after
+        `--force`) finds that claim already released. The stream-qualified
+        handoff on disk is then never looked for, and the bare
+        "no session-handoff" error gives no clue that `--stream <slug>` is what
+        restores it. Name the flag, and the slug when a matching file says which.
+        """
+        if self.stream_slug:
+            return ""
+        prefix = f"{self.date_yyyymmdd}-{self.session_num_padded}-"
+        suffix = "-session-handoff.md"
+        found = sorted(
+            p.name[len(prefix):-len(suffix)]
+            for p in (self.archive_dir / "session-handoff").glob(f"{prefix}*{suffix}")
+        )
+        hint = (
+            " No stream slug resolved for this session, so the stream-qualified "
+            "filename was never checked — a released stream claim (the usual "
+            "cause when re-running with --force) drops it. Pass --stream <slug> "
+            "to restore it"
+        )
+        if found:
+            hint += f" (handoffs on disk for this session: {', '.join(found)})"
+        return hint + "."
+
     def _check_handoff_present(self) -> None:
         """Hard-error if no session-handoff exists at the resolved stream slug,
         so a session can't be archived without a re-entry point. `--no-handoff`
@@ -534,14 +597,15 @@ class TranscriptGenerator:
         if self.no_handoff:
             print(
                 f"\nNotice: no session-handoff at {rel} (--no-handoff); "
-                f"archiving without a re-entry point.",
+                f"archiving without a re-entry point."
+                f"{self._missing_handoff_stream_hint()}",
                 file=sys.stderr,
             )
             return
         print(
             f"\nError: no session-handoff file found at {rel} — refusing to "
             f"archive without a re-entry point. Write the handoff first, or pass "
-            f"--no-handoff to override.",
+            f"--no-handoff to override.{self._missing_handoff_stream_hint()}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -564,7 +628,7 @@ class TranscriptGenerator:
 
         # Fall back to the scoped resolver (same encoding as init-session).
         # Supersedes _find_most_recent_jsonl (a divergent global rglob).
-        sid = _session.find_session_id(Path.cwd())
+        sid = _session.find_session_id(self._start_dir())
         return None if sid == "unknown" else sid
 
     def _find_most_recent_jsonl(self) -> str | None:
@@ -599,7 +663,7 @@ class TranscriptGenerator:
         before Grok discovery existed — fall back to the live harness
         session for this cwd and warn.
         """
-        cwd = Path.cwd()
+        cwd = self._start_dir()
         found = _session.find_session_source(self.session_id, cwd)
         if found is not None:
             return found
@@ -1041,6 +1105,10 @@ class TranscriptGenerator:
                 "session_id": self.session_id, "number": self.session_num,
                 "stream": self.stream_slug, "started_at": transcript.get("started_at"),
                 "date": f"{date[:4]}-{date[4:6]}-{date[6:]}",
+                # No init stamp to preserve (this manifest never had one), so
+                # record the install doing the archiving rather than leaving the
+                # provenance field absent.
+                "plugin_version": _plugin.plugin_version(),
                 "files": {},
             }
         # The manifest directory this session number previously resolved to
@@ -1868,7 +1936,16 @@ Examples:
     parser.add_argument(
         '--force',
         action='store_true',
-        help="Re-finalize even if this session number's manifest is already complete"
+        help="Re-finalize even if this session number's manifest is already "
+             "complete (a session whose stream claim was already released also "
+             "needs an explicit --stream <slug>)"
+    )
+    parser.add_argument(
+        '--project-path',
+        default=None,
+        metavar='PATH',
+        help='Explicit project root to search from (default: cwd). '
+             'Use this when running from a parent workspace to target a specific project.'
     )
     parser.add_argument(
         '--allow-empty',
@@ -1907,6 +1984,7 @@ Examples:
             force=args.force,
             allow_empty=args.allow_empty,
             no_handoff=args.no_handoff,
+            project_path=args.project_path,
             files_modified=getattr(args, 'files_modified', ''),
             artifacts=getattr(args, 'artifacts', ''),
             decisions=getattr(args, 'decisions', ''),

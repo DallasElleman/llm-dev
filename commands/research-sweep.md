@@ -30,9 +30,11 @@ for explicitly at the end, regardless of what was selected in the menu.
    `recommended` flag derived from calibration (see Flags below).
 3. **Fans out one read-only subagent per sub-domain**, each carrying the
    quality contract from
-   [report-craft.md](./references/research-sweep/report-craft.md) and the
-   matching prompt skeleton from
-   [report-types.md](./references/research-sweep/report-types.md).
+   `<llm-dev-plugin-root>/commands/references/research-sweep/report-craft.md`
+   and the matching prompt skeleton from
+   `<llm-dev-plugin-root>/commands/references/research-sweep/report-types.md`.
+   The dispatch plan JSON also carries both as absolute paths under
+   `reference_paths` — prefer those; they are already resolved for you.
 4. **Verifies adversarially, then synthesizes** one report per the
    synthesis rules in report-craft.md.
 
@@ -85,7 +87,8 @@ every option visible and still fits the cap. Send all four questions in a
 2. **Product & ops** (`multiSelect: true`) — same, for the `product-ops`
    group.
 3. **Depth** (single-select) — `quick` / `standard` (default) / `deep`, each
-   described per [report-types.md](./references/research-sweep/report-types.md#depth-levels).
+   described in the **Depth levels** section of
+   `<llm-dev-plugin-root>/commands/references/research-sweep/report-types.md#depth-levels`.
 4. **Publish when done?** (single-select) — `No, scratchpad only` (default) /
    `Yes, ask me where when the report is ready`.
 
@@ -109,13 +112,15 @@ agents, grok-4.6"*).
 
 ## Step 4 — Dispatch
 
-Parse the `RESEARCH_SWEEP_PLAN` JSON. Build each agent prompt from the section
-of [report-types.md](./references/research-sweep/report-types.md) named by the
+Parse the `RESEARCH_SWEEP_PLAN` JSON. Read the two reference files at the
+absolute paths in its `reference_paths` (equivalently
+`<llm-dev-plugin-root>/commands/references/research-sweep/report-types.md` and
+`<llm-dev-plugin-root>/commands/references/research-sweep/report-craft.md`).
+Build each agent prompt from the section of report-types.md named by the
 type's `report_types_section`, and give **every** prompt:
 
 1. **The read-only constraint**, verbatim from the Part 1 block in
-   [report-craft.md](./references/research-sweep/report-craft.md), plus the
-   scratchpad path for working files.
+   report-craft.md, plus the scratchpad path for working files.
 2. **The calibration facts.** This is the highest-leverage thing in the prompt.
 3. **Seeded findings** — any already-confirmed items from earlier waves, framed
    as *"ALREADY CONFIRMED — do not re-derive; extend beyond these."* Yield rises
@@ -203,8 +208,9 @@ and tell the user why.
   dispatch. Omit for discovery mode. Valid slugs: `code-quality-security`,
   `dependency-supply-chain`, `accessibility`, `coherence-sweep`,
   `architecture-product`, `onboarding`, `pre-launch-readiness`.
-- `--depth quick|standard|deep` — sweep depth (default: `standard`). See
-  [report-types.md](./references/research-sweep/report-types.md#depth-levels).
+- `--depth quick|standard|deep` — sweep depth (default: `standard`). See the
+  **Depth levels** section of
+  `<llm-dev-plugin-root>/commands/references/research-sweep/report-types.md#depth-levels`.
 - `--publish` — records that the user opted into publishing the report from
   the menu. The command still asks for explicit confirmation before writing
   the report anywhere durable.

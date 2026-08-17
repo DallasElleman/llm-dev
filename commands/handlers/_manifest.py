@@ -62,11 +62,15 @@ def new_manifest(
     transcript: str = "",
     notes: str = "",
     handoff: str = "",
+    plugin_version: str | None = None,
 ) -> dict:
     """Build a fully-populated manifest dict with every key present.
 
     Timestamps (`started_at`, `ended_at`, `date`) are canonicalized. `date`
-    defaults to `started_at` when not given.
+    defaults to `started_at` when not given. `plugin_version` is the
+    provenance stamp for the handler install that wrote the manifest; None
+    (an unreadable plugin manifest, or a record migrated from before the
+    stamp existed) is a legitimate value and is stamped as null.
     """
     started = normalize_ts(started_at)
     ended = normalize_ts(ended_at)
@@ -83,6 +87,7 @@ def new_manifest(
         "status": status,
         "conversation_id": conversation_id,
         "date": d or "",
+        "plugin_version": plugin_version,
         "files": {"transcript": transcript, "notes": notes, "handoff": handoff},
     }
 
