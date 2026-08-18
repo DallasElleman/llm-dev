@@ -470,6 +470,32 @@ def attempt_claim(archive_dir: Path, slug: str, session_id: str, now_iso: str,
     return result.claimed
 
 
+def cross_stream_claim_error(archive_dir: Path, session_id: str,
+                             target_slug: str, explicit: bool) -> str | None:
+    """Issue #108 tripwire: a genuinely fresh conversation cannot already hold
+    a stream claim. Returns an error message when `session_id` holds the claim
+    on a stream other than `target_slug`, else None. Re-claiming the same slug
+    is not this function's business — that stays with attempt_claim's
+    reclaim flow."""
+    for s in _streams.list_streams(archive_dir):
+        if s.claim == session_id and s.slug != target_slug:
+            if explicit:
+                return (
+                    f"this conversation already claims `{s.slug}`; release it "
+                    f"first (or end that session) before claiming "
+                    f"`{target_slug}`."
+                )
+            return (
+                f"id {session_id} already holds the claim on stream "
+                f"`{s.slug}` — a genuinely fresh conversation cannot already "
+                f"hold a claim, so this init has probably resolved another "
+                f"conversation's id. Re-run with --session-id <your "
+                f"conversation UUID> (on Claude Code: the UUID in your "
+                f"scratchpad directory path)."
+            )
+    return None
+
+
 def _lookup_session_title(session_id: str) -> str | None:
     """Best-effort title: Grok summary.json, else Claude /rename JSONL."""
     return _session.find_session_title_any(session_id, Path.cwd())
@@ -519,8 +545,18 @@ def main():
         "--session-id",
         default=None,
         metavar="ID",
-        help="Harness session id (Grok UUIDv7 or Claude JSONL stem). "
-             "When omitted, discover a recent Grok main session or Claude JSONL.",
+        help="This conversation's harness id (Grok UUIDv7 or Claude JSONL "
+             "stem). REQUIRED for a real init (issue #108): the agent reads "
+             "it from its own context (on Claude Code, the scratchpad-path "
+             "UUID) and passes it. Omitting it is a hard error unless "
+             "--infer-session-id or --dry-run is given.",
+    )
+    parser.add_argument(
+        "--infer-session-id",
+        action="store_true",
+        help="Accept freshest-JSONL inference of the session id (last "
+             "resort; prints what it inferred). Refused when any in-progress "
+             "manifest exists in this project's archive.",
     )
     parser.add_argument(
         "--project-path",
@@ -595,15 +631,71 @@ def main():
     # Get model display name
     model_display = get_model_display_name(args.model)
 
-    # Get session ID: explicit flag, then live harness discovery, then a
-    # synthetic fallback that is *not* a Claude-shaped id on Grok.
+    # Get session ID. Explicit --session-id is the required, verified path:
+    # inferring identity from the freshest JSONL is the root cause of four
+    # archive collisions (issue #108) and is at its least reliable exactly
+    # when init runs (helper-session activity peaks). Inference survives only
+    # behind --infer-session-id, loud and refused under ambiguity. Dry-run
+    # binds nothing, so it may still preview with an inferred id.
     if args.session_id:
         session_id = args.session_id
-    else:
+    elif not args.infer_session_id:
+        if not args.dry_run:
+            print(
+                "\nError: --session-id is required. Pass this conversation's "
+                "UUID (on Claude Code: the UUID in your scratchpad directory "
+                "path from your system prompt; on Grok: the UUIDv7 "
+                "conversation id). If it is genuinely unknowable, re-run "
+                "with --infer-session-id to accept live-scan inference "
+                "(issue #108: the freshest-JSONL guess is no longer "
+                "implicit).",
+                file=sys.stderr,
+            )
+            return 1
         session_id = _session.find_session_id(Path.cwd())
         if session_id == "unknown":
             session_id = _session.synthetic_session_id(new_num_padded)
+        print(
+            "\nNote (dry-run): no --session-id given; a real init requires "
+            "--session-id <this conversation's UUID> or --infer-session-id.",
+            file=sys.stderr,
+        )
+    else:
+        # --infer-session-id: inference under ambiguity is how collisions
+        # happen — if any session is already in progress here, the freshest
+        # JSONL may well be theirs.
+        inprog = [m for m in _manifest.iter_manifests(archive_dir)
+                  if m.get("status") == "in-progress"]
+        if inprog and not args.dry_run:
+            nums = ", ".join(sorted(str(m.get("number")) for m in inprog))
+            print(
+                f"\nError: --infer-session-id refused: {len(inprog)} "
+                f"in-progress manifest(s) exist (number(s) {nums}) — the "
+                f"freshest JSONL may belong to one of them. Pass "
+                f"--session-id <this conversation's UUID> instead.",
+                file=sys.stderr,
+            )
+            return 1
+        session_id = _session.find_session_id(Path.cwd())
+        if session_id == "unknown":
+            session_id = _session.synthetic_session_id(new_num_padded)
+            print(
+                f"\nInferred: no live harness session found; minted "
+                f"synthetic id {session_id!r}.",
+                file=sys.stderr,
+            )
         else:
+            src = _session.find_session_source(session_id, Path.cwd())
+            detail = ""
+            if src is not None:
+                try:
+                    mtime = datetime.fromtimestamp(
+                        src.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                    detail = f" (from {src}, modified {mtime})"
+                except OSError:
+                    detail = f" (from {src})"
+            print(f"\nInferred session id: {session_id!r}{detail}.",
+                  file=sys.stderr)
             # Discovery returns max(mtime) within the recency window. With two
             # conversations open on the same project both are in the window,
             # and the winner is whichever last wrote a line — not necessarily
@@ -622,6 +714,41 @@ def main():
                     f"init with --session-id <this conversation's id>.",
                     file=sys.stderr,
                 )
+
+    # --- Tripwire: create-only manifest writes (issue #108) ---------------
+    # The colliding conversation can resolve the SAME uuid as its victim, so
+    # identity equality cannot distinguish an honest re-init from a collision.
+    # The discriminator is explicitness: an id passed via --session-id is
+    # verified identity (re-init allowed, number reused); an inferred id is
+    # never trusted to overwrite an existing manifest.
+    existing = _manifest.read_manifest(
+        archive_dir / "sessions" / f"{date_yyyymmdd}-{session_id}" / "manifest.json")
+    if existing is not None:
+        if not args.session_id:
+            msg = (
+                f"a manifest for session {session_id} already exists "
+                f"(number {existing.get('number')}, stream "
+                f"{existing.get('stream') or 'none'}, status "
+                f"{existing.get('status')}). This init has probably resolved "
+                f"another conversation's id — re-run with --session-id <your "
+                f"conversation UUID> (on Claude Code: the UUID in your "
+                f"scratchpad directory path)."
+            )
+            if not args.dry_run:
+                print(f"\nError: {msg}", file=sys.stderr)
+                return 1
+            print(f"\nWARNING (dry-run continues): {msg}", file=sys.stderr)
+        else:
+            # Honest re-init: reuse the identity-stable fields rather than
+            # minting a new number (an interrupted stream-selection retry
+            # must not consume numbers or orphan its first manifest).
+            try:
+                new_num = int(existing.get("number"))
+                new_num_padded = f"{new_num:03d}"
+            except (TypeError, ValueError):
+                pass
+            if existing.get("started_at"):
+                started_at = existing["started_at"]
 
     print(f"Initializing session: {new_num_padded}")
 
@@ -672,6 +799,11 @@ def main():
     if args.no_stream:
         selected_slug = None
     elif args.stream:
+        err = cross_stream_claim_error(archive_dir, session_id, args.stream,
+                                       explicit=bool(args.session_id))
+        if err:
+            print(f"\nError: {err}", file=sys.stderr)
+            return 1
         if not attempt_claim(archive_dir, slug=args.stream, session_id=session_id,
                              now_iso=datetime.now().strftime("%Y-%m-%dT%H:%MZ"),
                              force=args.force_stream):
@@ -681,6 +813,11 @@ def main():
     else:
         selected_slug = pick_stream_interactively(archive_dir)
         if selected_slug:
+            err = cross_stream_claim_error(archive_dir, session_id, selected_slug,
+                                           explicit=bool(args.session_id))
+            if err:
+                print(f"\nError: {err}", file=sys.stderr)
+                return 1
             if not attempt_claim(archive_dir, slug=selected_slug, session_id=session_id,
                                  now_iso=datetime.now().strftime("%Y-%m-%dT%H:%MZ"),
                                  force=False):

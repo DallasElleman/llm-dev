@@ -30,12 +30,23 @@ next session, then archive this conversation as a JSON transcript.
    Follow the **Handoff Nudge** section below.
 4. **Run the transcript handler** to archive everything:
    ```bash
-   python3 <llm-dev-plugin-root>/commands/handlers/end-session.py <number> "<title>" [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--force] [--allow-empty] [--no-handoff] [--project-path PATH] [--dry-run]
+   python3 <llm-dev-plugin-root>/commands/handlers/end-session.py <number> "<title>" --session-id <your-conversation-uuid> [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--force] [--allow-empty] [--no-handoff] [--project-path PATH] [--dry-run]
    ```
 
    `<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
    set; otherwise the plugin directory shown in this command's listing. Do
    not expand an empty env var.
+
+   **Always pass `--session-id <your conversation UUID>`** (on Claude Code:
+   the UUID in your scratchpad directory path; on Grok: the UUIDv7
+   conversation id). The numbered in-progress manifest remains the identity
+   authority — an explicit `--session-id` that disagrees with it corrects the
+   manifest loudly (the sanctioned recovery for a wrongly-bound init). When
+   **no** manifest carries the number, the handler now hard-errors instead of
+   silently guessing from the freshest JSONL (issue #108); recover with
+   `--session-id` (plus `--stream <slug>` if a released stream claim must be
+   restored), or pass `--infer-session-id` only for a genuinely pre-manifest
+   legacy session (refused when any other session is in progress).
 
 ## Session Notes Nudge
 
@@ -132,9 +143,12 @@ and no stream interaction.
 1. **Resolves session identity by number** — Adopts the `session_id` and
    `stream` from the in-progress manifest whose `number` matches the argv
    conversation number (written by `/init-session`). This is authoritative and
-   stays correct under concurrent same-project conversations; only when no
-   manifest carries the number does it fall back to the scoped live-id scan
-   (a warning is printed). An explicit `--session-id` overrides both.
+   stays correct under concurrent same-project conversations. When no
+   manifest carries the number this is a **hard error** (issue #108 — the
+   old silent live-scan fallback is retired); recover with an explicit
+   `--session-id`, or `--infer-session-id` for pre-manifest legacy sessions.
+   An explicit `--session-id` overrides the manifest's recorded id, loudly
+   correcting it (the sanctioned recovery for a wrongly-bound init).
 2. **Converts the harness transcript** — Claude Code JSONL or Grok
    `updates.jsonl` → llm-dev JSON. If no supported transcript is found,
    archives notes + handoff with a warning and an empty dialogue.
@@ -165,12 +179,14 @@ and no stream interaction.
 - `--allow-empty` — Archive even when a transcript file was found on disk but imported **zero** dialogue entries. Without it this is a hard error: a file that imports to nothing is the signature of a broken importer, not an empty session (issue #96 shipped precisely because nothing checked). Use it only for a session that genuinely had no dialogue.
 - `--no-handoff` — Archive without requiring a session-handoff at the resolved stream slug (downgrades the missing-handoff hard error to a notice).
 - `--project-path PATH` — Explicit project root to search from (default: cwd). Use this when running from a parent workspace so the correct project's `.archive/` is targeted instead of the workspace's.
+- `--session-id ID` — This conversation's harness id. **Always pass it** — it cross-corrects a wrongly-bound manifest and is the required recovery input when no manifest carries the session number.
+- `--infer-session-id` — Last-resort opt-in to freshest-JSONL inference when no manifest carries the number (pre-manifest legacy sessions only). Prints what it inferred; refused when any other in-progress manifest exists.
 - `--dry-run` — Preview without writing files
 
 ## Example
 
 ```bash
-python3 <llm-dev-plugin-root>/commands/handlers/end-session.py 10 "Session Handoff Feature" --topics "session-handoff, end-session, plugin"
+python3 <llm-dev-plugin-root>/commands/handlers/end-session.py 10 "Session Handoff Feature" --session-id 2e253377-e4e8-4887-99a5-4cb67c3d0b63 --topics "session-handoff, end-session, plugin"
 ```
 
 ## After Running
