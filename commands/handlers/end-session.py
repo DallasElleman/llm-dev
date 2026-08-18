@@ -265,6 +265,9 @@ class TranscriptGenerator:
         # from a parent workspace like init-session / research-sweep /
         # update-agents-md. None means "use cwd" (the historical behavior).
         self.project_path = kwargs.get('project_path')
+        # Opt-in to freshest-JSONL inference when no manifest carries this
+        # session number (issue #108: the guess is no longer implicit).
+        self.infer_session_id = kwargs.get('infer_session_id', False)
 
         # Additional outcome fields
         self.provided_files_modified = kwargs.get('files_modified', '')
@@ -478,13 +481,50 @@ class TranscriptGenerator:
             return
 
         # No manifest for this number (e.g. a session started under the old
-        # handler, or a mistyped number) — warn and fall back to the live scan.
+        # handler, or a mistyped number). Guessing identity from the freshest
+        # JSONL here is the root cause of four archive collisions (issue
+        # #108), so the guess is no longer implicit: name the session with
+        # --session-id, or opt into inference with --infer-session-id.
+        # Dry-run binds nothing, so it may still preview via the live scan.
+        infer = getattr(self, "infer_session_id", False)
+        if not infer and not self.dry_run:
+            raise SystemExit(
+                f"Error: no in-progress manifest for session number "
+                f"{self.session_num}. Refusing to guess the session id from "
+                f"the freshest JSONL (issue #108) — re-run with --session-id "
+                f"<this conversation's UUID> (plus --stream <slug> if a "
+                f"released stream claim must be restored), or with "
+                f"--infer-session-id to accept live-scan inference for a "
+                f"genuinely pre-manifest session."
+            )
+        # Inference under ambiguity is how collisions happen: if any OTHER
+        # session is in progress in this archive, the freshest JSONL may well
+        # be theirs — refuse and require an explicit id.
+        def _num(m):
+            try:
+                return int(m.get("number"))
+            except (TypeError, ValueError):
+                return None
+        others = [m for m in _manifest.iter_manifests(self.archive_dir)
+                  if m.get("status") == "in-progress"
+                  and _num(m) != self.session_num]
+        if others and not self.dry_run:
+            nums = ", ".join(sorted(str(m.get("number")) for m in others))
+            raise SystemExit(
+                f"Error: --infer-session-id refused: {len(others)} other "
+                f"in-progress manifest(s) exist (number(s) {nums}) — the "
+                f"freshest JSONL may belong to one of them. Name this "
+                f"session explicitly with --session-id (and --stream if "
+                f"needed)."
+            )
         print(
             f"\nWarning: no in-progress manifest for session number "
-            f"{self.session_num}; falling back to live session-id resolution.",
+            f"{self.session_num}; falling back to live session-id resolution"
+            f"{' (--infer-session-id)' if infer else ' (dry-run preview)'}.",
             file=sys.stderr,
         )
         self.session_id = self._find_session_id()
+        print(f"Inferred session id: {self.session_id!r}", file=sys.stderr)
 
     def _warn_on_live_id_divergence(self) -> None:
         """Compare the live harness scan against the manifest this session
@@ -1948,6 +1988,14 @@ Examples:
              'Use this when running from a parent workspace to target a specific project.'
     )
     parser.add_argument(
+        '--infer-session-id',
+        action='store_true',
+        help='Accept freshest-JSONL inference when no manifest carries this '
+             'session number (pre-manifest legacy sessions only). Refused when '
+             'any other in-progress manifest exists. Without this flag, a '
+             'missing numbered manifest is a hard error (issue #108).'
+    )
+    parser.add_argument(
         '--allow-empty',
         action='store_true',
         help='Archive even when a transcript file was found but imported zero '
@@ -1985,6 +2033,7 @@ Examples:
             allow_empty=args.allow_empty,
             no_handoff=args.no_handoff,
             project_path=args.project_path,
+            infer_session_id=args.infer_session_id,
             files_modified=getattr(args, 'files_modified', ''),
             artifacts=getattr(args, 'artifacts', ''),
             decisions=getattr(args, 'decisions', ''),

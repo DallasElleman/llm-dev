@@ -155,8 +155,14 @@ durable observations over play-by-play narration.
 set in this shell; otherwise the plugin directory shown in this command's
 listing. Do **not** expand an empty env var — that becomes `/commands/handlers/...`.
 Always pass `--model <your model id>` (e.g. `grok-4.6`, `claude-opus-4-7`).
-Pass `--session-id <id>` when you know the harness conversation id (Grok
-UUIDv7 or Claude JSONL stem).
+You **MUST** also pass `--session-id <your conversation UUID>` on the step-3
+init call — the handler hard-errors without it (issue #108: inferred ids
+caused four archive collisions). Read the UUID from your own context: on
+Claude Code it is the UUID in your scratchpad directory path (shown in your
+system prompt); on Grok it is the UUIDv7 conversation id. Only if it is
+genuinely unknowable, pass `--infer-session-id` instead (last resort; the
+handler prints what it inferred and refuses when any other session is in
+progress).
 
 **Step 1 — discover** (no stream flag): the handler prints
 `STREAM_SELECTION_NEEDED` and exits without initializing.
@@ -169,9 +175,9 @@ python3 <llm-dev-plugin-root>/commands/handlers/init-session.py $ARGUMENTS
 and your model id.
 
 ```bash
-python3 <llm-dev-plugin-root>/commands/handlers/init-session.py --stream <slug> --model <your-model-id>
+python3 <llm-dev-plugin-root>/commands/handlers/init-session.py --stream <slug> --model <your-model-id> --session-id <your-conversation-uuid>
 # or, for a free session:
-python3 <llm-dev-plugin-root>/commands/handlers/init-session.py --no-stream --model <your-model-id>
+python3 <llm-dev-plugin-root>/commands/handlers/init-session.py --no-stream --model <your-model-id> --session-id <your-conversation-uuid>
 ```
 
 ## Arguments
@@ -180,8 +186,12 @@ python3 <llm-dev-plugin-root>/commands/handlers/init-session.py --no-stream --mo
   (e.g. `grok-4.6`, `claude-opus-4-7`) on the step-3 init call so the session
   records the correct model; the handler default (`claude-sonnet-4-6`) is only
   a fallback.
-- `--session-id ID` - Harness conversation id (Grok UUIDv7 or Claude JSONL
-  stem). When omitted, discover a recent Grok main session or Claude JSONL.
+- `--session-id ID` - This conversation's harness id (Grok UUIDv7 or Claude
+  JSONL stem). **REQUIRED for a real init** — omitting it is a hard error
+  (issue #108). Discovery mode, `--list-streams`, and `--dry-run` don't need it.
+- `--infer-session-id` - Last-resort opt-in to freshest-JSONL inference when
+  the conversation UUID is genuinely unknowable. Prints what it inferred;
+  refused when any in-progress manifest exists in this project's archive.
 - `--user USERNAME` - GitHub username for transcript attribution (default: prompts user)
 - `--stream <slug>` - Claim a specific stream non-interactively
 - `--no-stream` - Start a free session without stream selection
