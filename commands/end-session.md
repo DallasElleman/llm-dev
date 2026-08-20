@@ -12,23 +12,30 @@ next session, then archive this conversation as a JSON transcript.
 
 ## Flow (you, the session agent, perform these in order)
 
-1. **Finalize the session notes.** Before writing the handoff, do a final pass
+1. **Reconcile the project's living state.** Before writing any session
+   artifact, bring the project itself up to date with what this session
+   changed: its progress ledger (`CURRENT-TODOs.md` or the project's
+   equivalent), any documentation the work invalidated, and the issue
+   tracker. Do this *first* — the notes and handoff should describe a repo
+   that already reflects the session, not work the repo hasn't absorbed yet.
+   Follow the **Project State Nudge** section below.
+2. **Finalize the session notes.** Before writing the handoff, do a final pass
    on this session's notes file (`.archive/session-notes/{date_yyyymmdd}-{NNN}-*-session-notes.md`):
    capture what worked, lessons learned, mistakes made, and assumptions proven
    wrong from this session. The notes are the cross-session learning artifact and
    the handler commits them **as-is** — if you don't update them now, they archive
    stale. Follow the **Session Notes Nudge** section below.
-2. **Read the prior handoff** (if it exists), so you can carry the chain
+3. **Read the prior handoff** (if it exists), so you can carry the chain
    forward. Look in `.archive/session-handoff/` for the most recent
    `*-session-handoff.md`. If one exists, read it. If not, skip.
-3. **Write the new handoff file** at:
+4. **Write the new handoff file** at:
    `.archive/session-handoff/{date}-{NNN}-session-handoff.md`
    where `NNN` is the zero-padded session number (e.g., `010`) and `{date}` is
    the **same `YYYYMMDD` prefix as this session's notes file** — not today's
    date. The handler dates the whole bundle (transcript, notes, handoff) from
    that start-date prefix, so a session that spans midnight stays consistent.
    Follow the **Handoff Nudge** section below.
-4. **Run the transcript handler** to archive everything:
+5. **Run the transcript handler** to archive everything:
    ```bash
    python3 <llm-dev-plugin-root>/commands/handlers/end-session.py <number> "<title>" --session-id <your-conversation-uuid> [--topics "topic1, topic2"] [--no-sanitize] [--no-push] [--force] [--allow-empty] [--no-handoff] [--project-path PATH] [--dry-run]
    ```
@@ -47,6 +54,38 @@ next session, then archive this conversation as a JSON transcript.
    `--session-id` (plus `--stream <slug>` if a released stream claim must be
    restored), or pass `--infer-session-id` only for a genuinely pre-manifest
    legacy session (refused when any other session is in progress).
+
+## Project State Nudge
+
+> Before the session artifacts, reconcile the **project** with what this
+> session actually changed. The handoff and notes are *session* records read
+> by the next agent; they are not the project's durable state. Anyone reading
+> the repo cold — a contributor, a future you, a session that skips the
+> handoff — sees only what's committed here.
+>
+> Update, in this order:
+>
+> - **Progress ledger** — `CURRENT-TODOs.md`, or whatever the project keeps
+>   (a roadmap, a status doc, a stream section). Current version, executive
+>   summary, what shipped this session, what moved to next, what's now
+>   blocked. A ledger whose summary describes a state two sessions old is
+>   worse than no ledger.
+> - **Project documentation** materially invalidated by the work — `README`,
+>   `CLAUDE.md`/`AGENTS.md`, design docs, command or skill docs. If the
+>   session changed a behavior, flag or fix the text that still describes the
+>   old one.
+> - **Issue tracker** — close what the session finished (referencing the PR or
+>   commit), comment progress on what it advanced, file what it discovered,
+>   and correct or close what it invalidated.
+>
+> **Scope discipline:** reconcile what *this session* changed. This is not a
+> documentation audit, and an end-session is not the place to start one. If
+> you find unrelated drift, file an issue for it rather than fixing it here.
+>
+> **Commit what you touch.** The handler stages the archive bundle only —
+> ledger and doc edits are yours to commit (they belong with the work they
+> describe, not with the transcript). The handler prints a reminder listing
+> anything still uncommitted outside the archive.
 
 ## Session Notes Nudge
 

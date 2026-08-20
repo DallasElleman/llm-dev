@@ -127,10 +127,11 @@ Wind the session down — finalize session notes, write a handoff document, and 
 ```
 
 **Flow (Claude performs these in order):**
-1. **Finalize session notes** — do a final pass on `.archive/session-notes/YYYYMMDD-NNN-*-session-notes.md`, capturing what worked, lessons learned, mistakes made, and assumptions proven wrong. The handler commits notes as-is; update them before running.
-2. **Read the prior handoff** — load the most recent `*-session-handoff.md` from `.archive/session-handoff/` to carry the chain forward.
-3. **Write the new handoff** at `.archive/session-handoff/YYYYMMDD-NNN-session-handoff.md` — forward-looking context for the next session: where we left off, wins, in-flight work, deferred items, locked-in decisions, key references, gotchas, and a first-action pointer.
-4. **Run the handler** to archive everything.
+1. **Reconcile the project's living state** — update the progress ledger (`CURRENT-TODOs.md` or equivalent), any documentation the session's work invalidated, and the issue tracker (close what finished, comment what advanced, file what was discovered). Scoped to what this session changed, not a documentation audit.
+2. **Finalize session notes** — do a final pass on `.archive/session-notes/YYYYMMDD-NNN-*-session-notes.md`, capturing what worked, lessons learned, mistakes made, and assumptions proven wrong. The handler commits notes as-is; update them before running.
+3. **Read the prior handoff** — load the most recent `*-session-handoff.md` from `.archive/session-handoff/` to carry the chain forward.
+4. **Write the new handoff** at `.archive/session-handoff/YYYYMMDD-NNN-session-handoff.md` — forward-looking context for the next session: where we left off, wins, in-flight work, deferred items, locked-in decisions, key references, gotchas, and a first-action pointer.
+5. **Run the handler** to archive everything.
 
 **What the handler does automatically:**
 - Finds session ID from the index placeholder set by `/init-session`
@@ -140,6 +141,7 @@ Wind the session down — finalize session notes, write a handoff document, and 
 - Updates transcript index (replaces `[In Progress]` placeholder)
 - Updates CHANGELOG (adds entry at top, reverse-chronological)
 - Commits the bundle: transcript + session-notes + session-handoff
+- Reports any project files changed outside the archive that the bundle commit did not include
 
 **Stream behavior** — if the session held a stream claim:
 - Handoff and transcript filenames include the stream slug

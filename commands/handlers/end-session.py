@@ -1716,6 +1716,58 @@ class TranscriptGenerator:
             print(f"\nWarning: git push failed ({stderr}). "
                   f"Push manually with: git push -u origin {branch}")
 
+    def _report_uncommitted_project_changes(self) -> None:
+        """Report project-file changes left uncommitted by the archive commit.
+
+        `/end-session` step 1 asks the agent to reconcile the project's living
+        state (progress ledger, docs, issues) before archiving, but
+        `_git_commit_transcripts` stages archive paths only. Without this
+        notice those edits sit dirty while the handler reports a successful
+        commit — the reconciliation looks done and isn't. Report-only: project
+        files are not ours to commit under an "Add transcript" message.
+        """
+        if not self._is_git_repo():
+            return
+        try:
+            result = subprocess.run(
+                ['git', 'status', '--porcelain'],
+                cwd=str(self.project_dir), capture_output=True, text=True, check=True,
+            )
+        except (subprocess.CalledProcessError, OSError):
+            return  # never let a status probe break an otherwise-good archive
+
+        try:
+            archive_rel = self.archive_dir.relative_to(self.project_dir).as_posix()
+        except ValueError:
+            archive_rel = None
+
+        paths = []
+        for line in result.stdout.splitlines():
+            if len(line) < 4:
+                continue
+            path = line[3:]
+            # Renames read "old -> new"; the new path is what needs committing.
+            if ' -> ' in path:
+                path = path.split(' -> ', 1)[1]
+            path = path.strip('"')
+            if archive_rel and (path == archive_rel or path.startswith(archive_rel + '/')):
+                continue
+            paths.append(path)
+
+        if not paths:
+            return
+
+        shown = paths[:10]
+        listing = '\n'.join(f"  {p}" for p in shown)
+        if len(paths) > len(shown):
+            listing += f"\n  ... and {len(paths) - len(shown)} more"
+        print(
+            f"\nNotice: {len(paths)} project file(s) changed outside the archive and "
+            f"are NOT in the archive commit:\n{listing}\n"
+            f"If these are the ledger/doc updates from this session, commit them "
+            f"with the work they describe (e.g. `git add -A && git commit`)."
+        )
+
     def _assert_bundle_complete(self) -> None:
         """Post-finalization guardrail: verify exactly one complete manifest for
         this session_id and that every path in files.{transcript,notes,handoff}
@@ -1871,6 +1923,7 @@ class TranscriptGenerator:
 
         # Auto-commit if in git repo
         self._git_commit_transcripts()
+        self._report_uncommitted_project_changes()
 
         print(f"\nDone! Conversation {self.session_num_padded} archived successfully.")
 
