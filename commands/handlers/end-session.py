@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """end-session.py - Archive an LLM session
 
-Converts the Claude Code JSONL transcript to llm-dev JSON format and commits
+Converts a supported harness transcript to llm-dev JSON format and commits
 it alongside the per-session notes and handoff documents.
 
 Usage: python end-session.py <session-num> "<title>" [options]
@@ -16,7 +16,7 @@ Automatically:
 Examples:
     python end-session.py 4 "Setup automation framework"
     python end-session.py 5 "Refactor parser logic" --topics "python, refactoring"
-    python end-session.py 6 "Debug API issues" --session-id abc123 --dry-run
+    python end-session.py 6 "Debug API issues" --session-id 7cde593f-6a28-4aae-a1e5-123456789abc --dry-run
     python end-session.py 9 "Session Title" \
         --topics "topic1, topic2" \
         --files-modified "orchestrate.py, CLAUDE.md" \
@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -240,8 +241,98 @@ class Version:
 EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 
 
+def _known_usernames(findings: list[dict]) -> list[str]:
+    """Accounts evidenced by original home paths, longest first."""
+    return sorted(
+        {name for finding in findings if finding.get('category') == 'home_path'
+         for name in finding.get('usernames', ()) if name},
+        key=lambda value: (-len(value), value),
+    )
+
+
+def _standalone_user_spans(text: str, usernames: list[str]):
+    """Yield complete known account mentions in prose, excluding identifiers.
+
+    Path components, email addresses and existing placeholders are deliberately
+    excluded. Sentence punctuation and quote/backtick delimiters are accepted.
+    """
+    if not usernames:
+        return
+    pattern = re.compile('|'.join(re.escape(name) for name in usernames))
+
+    def word_part(char: str) -> bool:
+        return bool(char) and (char == '_' or unicodedata.category(char)[0] in 'LNM')
+
+    for match in pattern.finditer(text):
+        start, end = match.span()
+        before = text[start - 1] if start else ''
+        after = text[end] if end < len(text) else ''
+        if word_part(before) or word_part(after):
+            continue
+        if (before and before in '-/\\@') or (after and after in '-/\\@'):
+            continue
+        if before == '.' and start > 1 and word_part(text[start - 2]):
+            continue
+        if after == '.' and end + 1 < len(text) and word_part(text[end + 1]):
+            continue
+        if before == '<' and after == '>':
+            if match.group() in ('user', 'email'):
+                continue
+            # Replace the wrapper too, so <alice> becomes <user> rather than
+            # an accidental double-bracket placeholder.
+            yield start - 1, end + 1
+            continue
+        yield start, end
+
+
+def _map_narrative_values(content: str, transform) -> str:
+    """Apply a text rule only to prose fields in a serialized transcript.
+
+    Plain text is accepted for sanitizer helpers/tests. The explicit allowlist
+    keeps a username such as `user` from rewriting JSON keys, role enums or IDs.
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return transform(content)
+    if not isinstance(data, dict) or not any(
+            key in data for key in ('dialogue', 'summary', 'outcomes')):
+        return transform(content)
+
+    def one(record, key):
+        if isinstance(record, dict) and isinstance(record.get(key), str):
+            record[key] = transform(record[key])
+
+    def many(record, key):
+        if isinstance(record, dict) and isinstance(record.get(key), list):
+            record[key] = [transform(item) if isinstance(item, str) else item
+                           for item in record[key]]
+
+    summary = data.get('summary')
+    one(summary, 'title')
+    many(summary, 'topics')
+    many(summary, 'outcomes')
+    dialogue = data.get('dialogue')
+    if isinstance(dialogue, list):
+        for turn in dialogue:
+            one(turn, 'message')
+            if isinstance(turn, dict) and isinstance(turn.get('tool_calls'), list):
+                for call in turn['tool_calls']:
+                    one(call, 'description')
+    outcomes = data.get('outcomes')
+    many(outcomes, 'decisions')
+    many(outcomes, 'next_steps')
+    if isinstance(outcomes, dict):
+        for key, description_key in (('files_created', 'description'),
+                                     ('files_modified', 'changes')):
+            if isinstance(outcomes.get(key), list):
+                for item in outcomes[key]:
+                    one(item, description_key)
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
 class TranscriptGenerator:
-    """Generates structured JSON transcripts from Claude Code JSONL sessions."""
+    """Generates structured JSON transcripts from harness sessions."""
 
     def __init__(self, session_num: int, title: str, stream_slug: str | None = None, **kwargs):
         self.session_num = session_num
@@ -281,6 +372,9 @@ class TranscriptGenerator:
             raise FileNotFoundError("No .archive/transcripts directory found")
 
         self.project_dir = self.archive_dir.parent
+        if self.session_id is not None:
+            self.session_id = _session.validate_explicit_session_id(
+                self.session_id, self.project_dir)
         self.project_id = self.project_dir.name
         self.index_path = self.archive_dir / "transcripts" / "_index.md"
         self.changelog_path = self.archive_dir / "CHANGELOG.md"
@@ -304,7 +398,7 @@ class TranscriptGenerator:
                 "Provide it with --session-id or ensure init-session was run"
             )
 
-        # Locate the harness transcript (Grok updates.jsonl or Claude JSONL).
+        # Locate the harness transcript (Grok, Codex, or Claude JSONL).
         # A missing/unsupported source is not a hard error — we still archive
         # notes + handoff and warn (#84 / #94 honesty: capability-negotiated).
         self.jsonl_path = self._find_jsonl_file()
@@ -698,7 +792,7 @@ class TranscriptGenerator:
     def _find_jsonl_file(self) -> Path | None:
         """Locate the harness transcript for this session id.
 
-        Prefers the stored id (Grok session dir or Claude JSONL). If that
+        Prefers the stored id (Grok session dir, Codex rollout, or Claude JSONL). If that
         id is missing — including the synthetic `claude-NNN-hex` minted
         before Grok discovery existed — fall back to the live harness
         session for this cwd and warn.
@@ -905,7 +999,9 @@ class TranscriptGenerator:
                     'model': None
                 },
                 {
-                    'name': model_name or 'Claude',
+                    'name': model_name or {
+                        'grok': 'Grok', 'codex': 'Codex',
+                    }.get(imported.harness, 'Claude'),
                     'github': None,
                     'role': 'assistant',
                     'model': model_id
@@ -1347,8 +1443,8 @@ class TranscriptGenerator:
         Returns a list of findings, each with 'type', 'count', 'category', and
         (for pattern-based findings) 'pattern'/'replacement' used to drive
         `_sanitize_content`. 'category' marks which findings that method is
-        actually able to redact ('home_path', 'participant_name') versus
-        report-only ('email', 'secret').
+        actually able to redact (home paths, known usernames, participant
+        names, emails) versus report-only secrets.
         """
         findings = []
 
@@ -1359,9 +1455,9 @@ class TranscriptGenerator:
         # off a single captured username (matches[0]) let any earlier, different
         # capture (e.g. a truncated example path) silently disarm the rest.
         home_patterns = [
-            (r'/Users/([A-Za-z0-9._\-]+)', '/Users/<user>', 'macOS home path'),
-            (r'/home/([A-Za-z0-9._\-]+)', '/home/<user>', 'Linux home path'),
-            (r'C:\\\\Users\\\\([A-Za-z0-9._\-]+)', 'C:\\\\Users\\\\<user>', 'Windows home path'),
+            (r'/Users/([A-Za-z0-9._\-]*[A-Za-z0-9_\-])', '/Users/<user>', 'macOS home path'),
+            (r'/home/([A-Za-z0-9._\-]*[A-Za-z0-9_\-])', '/home/<user>', 'Linux home path'),
+            (r'C:\\\\Users\\\\([A-Za-z0-9._\-]*[A-Za-z0-9_\-])', 'C:\\\\Users\\\\<user>', 'Windows home path'),
             # Hyphen-encoded project dirs (~/.claude/projects/-Users-<user>-...).
             # The username is the FIRST segment after the prefix, so the class
             # deliberately excludes '-': a greedy [A-Za-z0-9._\-]+ swallows the
@@ -1372,9 +1468,9 @@ class TranscriptGenerator:
             # specifically to debug the archiver. Redact the identity, keep the
             # path. (A username containing a hyphen is still fully redacted, by
             # the literal pass below, whenever it also appears in slash form.)
-            (r'-Users-([A-Za-z0-9._]+)', '-Users-<user>',
+            (r'-Users-([A-Za-z0-9._]*[A-Za-z0-9_])', '-Users-<user>',
              'macOS hyphen-encoded home path (project dir)'),
-            (r'-home-([A-Za-z0-9._]+)', '-home-<user>',
+            (r'-home-([A-Za-z0-9._]*[A-Za-z0-9_])', '-home-<user>',
              'Linux hyphen-encoded home path (project dir)'),
         ]
         for pattern, replacement, label in home_patterns:
@@ -1400,6 +1496,25 @@ class TranscriptGenerator:
                     # username; redaction itself uses 'pattern'/'replacement'
                     # above so it no longer depends on this being complete.
                     'username': usernames[0],
+                })
+
+        # Reuse identities evidenced by home paths for standalone mentions in
+        # narrative text. No OS-account or general name inference is involved.
+        known = _known_usernames(findings)
+        if known:
+            bare_count = 0
+
+            def count_mentions(value):
+                nonlocal bare_count
+                bare_count += sum(1 for _ in _standalone_user_spans(value, known))
+                return value
+
+            _map_narrative_values(content, count_mentions)
+            if bare_count:
+                findings.append({
+                    'type': 'known username in transcript text',
+                    'count': bare_count,
+                    'category': 'known_username',
                 })
 
         # Email addresses
@@ -1454,6 +1569,20 @@ class TranscriptGenerator:
         """
         sanitized = content
 
+        # A generic encoded-path pattern stops at a hyphen and would leave a
+        # surname behind. Replace full known hyphenated accounts first.
+        for username in _known_usernames(findings):
+            if '-' not in username:
+                continue
+            for prefix, replacement in (('-Users-', '-Users-<user>'),
+                                        ('-home-', '-home-<user>')):
+                token = f'{prefix}{username}'
+                sanitized = re.sub(
+                    re.escape(token) + r'(?=-|/|\\|"|$)',
+                    lambda _m, label=replacement: label,
+                    sanitized,
+                )
+
         for finding in findings:
             if 'pattern' in finding and 'replacement' in finding:
                 # A literal-string repl (not a callable) would have its own
@@ -1473,23 +1602,19 @@ class TranscriptGenerator:
                         return _r
                 sanitized = re.sub(finding['pattern'], _repl, sanitized)
 
-        # Hyphen-encoded usernames that contain a '-' are only partially caught
-        # by the anchored pattern above (it stops at the first hyphen). The
-        # slash forms are unambiguous, so any username learned from them is
-        # redacted literally in the encoded form too, tail preserved.
-        for finding in findings:
-            if finding.get('category') != 'home_path':
-                continue
-            for username in finding.get('usernames', ()):
-                if '-' not in username:
-                    continue  # already fully handled by the anchored pattern
-                for prefix, label in (('-Users-', '-Users-<user>'),
-                                      ('-home-', '-home-<user>')):
-                    sanitized = sanitized.replace(f'{prefix}{username}', label)
-
         # Replace participant name
         if self.user_name and self.user_name != 'User':
             sanitized = sanitized.replace(self.user_name, '<user>')
+
+        known = _known_usernames(findings)
+        if known:
+            def redact_mentions(value):
+                spans = list(_standalone_user_spans(value, known))
+                for start, end in reversed(spans):
+                    value = value[:start] + '<user>' + value[end:]
+                return value
+
+            sanitized = _map_narrative_values(sanitized, redact_mentions)
 
         return sanitized
 
@@ -1497,11 +1622,8 @@ class TranscriptGenerator:
     def _unredacted_note(findings: list[dict]) -> str:
         """Name the categories `_sanitize_content` never redacts.
 
-        `_scan_pii` detects emails and secrets but only *reports* them, and
-        `_assert_sanitized` excludes them for that reason. Printing a bare
-        "Sanitized." over a scan that found an email address repeats the exact
-        shape of issue #97 one category over: a true statement about work that
-        did not happen. Say what was left.
+        Emails are redacted; potential secrets remain report-only because
+        arbitrary token replacement can corrupt surrounding structure.
         """
         left = sorted({f['type'] for f in findings
                        if f.get('category') == 'secret'})
@@ -1510,7 +1632,8 @@ class TranscriptGenerator:
         return (f" Not redacted (report-only): {', '.join(left)}."
                 " Review before publishing, or edit the transcript by hand.")
 
-    def _assert_sanitized(self, content: str) -> None:
+    def _assert_sanitized(self, content: str,
+                          original_findings: list[dict] | None = None) -> None:
         """Post-sanitize guardrail: re-scan the sanitized content and abort
         loudly if any home-path or participant-name finding survives.
 
@@ -1525,6 +1648,22 @@ class TranscriptGenerator:
         remaining = [f for f in self._scan_pii(content)
                      if f.get('category') in ('home_path', 'participant_name',
                                               'email')]
+        known = _known_usernames(original_findings or [])
+        if known:
+            bare_count = 0
+
+            def count_mentions(value):
+                nonlocal bare_count
+                bare_count += sum(1 for _ in _standalone_user_spans(value, known))
+                return value
+
+            _map_narrative_values(content, count_mentions)
+            if bare_count:
+                remaining.append({
+                    'type': 'known username in transcript text',
+                    'count': bare_count,
+                    'category': 'known_username',
+                })
         if remaining:
             self._report_findings(remaining)
             print(
@@ -1896,7 +2035,7 @@ class TranscriptGenerator:
                     sys.exit(0)
                 elif response in ('s', 'sanitize'):
                     content = self._sanitize_content(content, findings)
-                    self._assert_sanitized(content)
+                    self._assert_sanitized(content, findings)
                     print("Sanitized." + self._unredacted_note(findings))
                 # 'c' or 'commit' or empty: proceed as-is
             except (KeyboardInterrupt, EOFError):
@@ -1905,7 +2044,7 @@ class TranscriptGenerator:
         elif findings and self.sanitize:
             self._report_findings(findings)
             content = self._sanitize_content(content, findings)
-            self._assert_sanitized(content)
+            self._assert_sanitized(content, findings)
             print("Auto-sanitized (--sanitize flag)."
                   + self._unredacted_note(findings))
 
@@ -1937,7 +2076,7 @@ def main():
 Examples:
   %(prog)s 4 "Setup automation framework"
   %(prog)s 5 "Refactor parser logic" --topics "python, refactoring"
-  %(prog)s 6 "Debug API issues" --session-id abc123 --dry-run
+  %(prog)s 6 "Debug API issues" --session-id 7cde593f-6a28-4aae-a1e5-123456789abc --dry-run
         """
     )
 
@@ -1959,7 +2098,9 @@ Examples:
     parser.add_argument(
         '--session-id',
         type=str,
-        help='Session UUID (auto-detected if not provided)'
+        help='Full conversation UUID (or exact existing Claude transcript stem). '
+             'For Claude background jobs, read sessionId from '
+             '~/.claude/jobs/<job-id>/state.json.'
     )
     parser.add_argument(
         '--dry-run',

@@ -154,12 +154,19 @@ durable observations over play-by-play narration.
 `<llm-dev-plugin-root>` is `$GROK_PLUGIN_ROOT` or `$CLAUDE_PLUGIN_ROOT` if
 set in this shell; otherwise the plugin directory shown in this command's
 listing. Do **not** expand an empty env var — that becomes `/commands/handlers/...`.
-Always pass `--model <your model id>` (e.g. `grok-4.6`, `claude-opus-4-7`).
+Always pass `--model <your model id>` (e.g. `grok-4.6`, `claude-opus-4-7`,
+`gpt-6-astra`).
 You **MUST** also pass `--session-id <your conversation UUID>` on the step-3
 init call — the handler hard-errors without it (issue #108: inferred ids
 caused four archive collisions). Read the UUID from your own context: on
-Claude Code it is the UUID in your scratchpad directory path (shown in your
-system prompt); on Grok it is the UUIDv7 conversation id. Only if it is
+foreground Claude Code it is the full UUID in your scratchpad directory
+path (shown in your system prompt). For a Claude background job, the job
+directory name is only a short job ID: read the full `sessionId` from
+`~/.claude/jobs/<job-id>/state.json`. On Grok use the UUIDv7 conversation
+id. On Codex use the full conversation/thread UUID from the current runtime
+context, not a child agent's parent `session_id` metadata; Codex rollout
+import requires this exact ID and does not use recent-file inference. Only
+if it is
 genuinely unknowable, pass `--infer-session-id` instead (last resort; the
 handler prints what it inferred and refuses when any other session is in
 progress).
@@ -183,12 +190,15 @@ python3 <llm-dev-plugin-root>/commands/handlers/init-session.py --no-stream --mo
 ## Arguments
 
 - `--model MODEL` - LLM model identifier. **Always pass your own model id**
-  (e.g. `grok-4.6`, `claude-opus-4-7`) on the step-3 init call so the session
+  (e.g. `grok-4.6`, `claude-opus-4-7`, `gpt-6-astra`) on the step-3 init call so the session
   records the correct model; the handler default (`claude-sonnet-4-6`) is only
   a fallback.
-- `--session-id ID` - This conversation's harness id (Grok UUIDv7 or Claude
-  JSONL stem). **REQUIRED for a real init** — omitting it is a hard error
-  (issue #108). Discovery mode, `--list-streams`, and `--dry-run` don't need it.
+- `--session-id ID` - This conversation's full UUID (Claude UUIDv4, Grok or
+  Codex UUIDv7) or an exact existing Claude JSONL stem. A truncated
+  background-job ID is rejected. **REQUIRED for a real init** — omitting it
+  is a hard error (issue #108). Discovery mode, `--list-streams`, and
+  `--dry-run` don't need it; if supplied there, it is validated before any
+  state changes.
 - `--infer-session-id` - Last-resort opt-in to freshest-JSONL inference when
   the conversation UUID is genuinely unknowable. Prints what it inferred;
   refused when any in-progress manifest exists in this project's archive.

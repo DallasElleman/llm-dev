@@ -2,8 +2,8 @@
 
 Provider parsers produce the same dialogue / file-op / model fields that
 `end-session` already archives. Claude JSONL stays the reference shape;
-Grok `updates.jsonl` (ACP `session/update` chunks) is a second importer
-behind the same `TranscriptImporter` probe/import contract (#84 / #94).
+Grok `updates.jsonl` (ACP `session/update` chunks) and Codex rollout JSONL
+use the same `TranscriptImporter` probe/import contract (#84 / #94).
 
 Stdlib only. Unknown or missing sources degrade to an empty import plus
 a warning — they must not raise.
@@ -11,6 +11,7 @@ a warning — they must not raise.
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -417,6 +418,143 @@ class GrokUpdatesImporter:
         )
 
 
+_CODEX_TOOL_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,79}\Z")
+
+
+def _codex_public_content(role: str, content: object) -> str:
+    """Keep visible text and neutral non-text markers, never embedded media."""
+    if not isinstance(content, list):
+        return ""
+    text_parts: list[str] = []
+    expected = "input_text" if role == "user" else "output_text"
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == expected and isinstance(block.get("text"), str):
+            text_parts.append(block["text"])
+        elif role == "user" and kind == "input_image":
+            text_parts.append("[image]")
+        elif role == "user" and kind in ("input_audio", "audio"):
+            text_parts.append("[audio]")
+        elif role == "user" and kind == "input_file":
+            text_parts.append("[file]")
+    return "\n".join(part for part in text_parts if part)
+
+
+def _codex_tool_name(payload: dict) -> str:
+    name = payload.get("name")
+    namespace = payload.get("namespace")
+    if not isinstance(name, str) or not _CODEX_TOOL_NAME_RE.fullmatch(name):
+        return "Unknown"
+    if isinstance(namespace, str) and _CODEX_TOOL_NAME_RE.fullmatch(namespace):
+        return f"{namespace}.{name}"
+    return name
+
+
+class CodexRolloutImporter:
+    """Import public dialogue from an exact-ID Codex rollout JSONL.
+
+    Codex records often include duplicate `event_msg` turns, hidden reasoning,
+    and arbitrary tool outputs. Import only `response_item` public messages and
+    safe tool names; raw arguments, results, and media never enter the archive.
+    """
+
+    def probe(self, source: Path) -> bool:
+        if not source.is_file() or source.is_symlink() or not source.name.startswith("rollout-"):
+            return False
+        meta = _session._first_codex_session_meta(source)
+        owner = meta.get("id") if meta else None
+        return isinstance(owner, str) and source.name.endswith(f"-{owner}.jsonl")
+
+    def import_transcript(self, source: Path, fallback_ts: str) -> ImportResult:
+        messages: list[dict] = []
+        tools_used: Counter = Counter()
+        model_id: str | None = None
+        first_ts = last_ts = None
+        warnings: list[str] = []
+
+        try:
+            fh = source.open("r", encoding="utf-8")
+        except OSError as exc:
+            return ImportResult(
+                harness="codex", source_format="codex_rollout_jsonl",
+                started_at=fallback_ts, ended_at=fallback_ts,
+                warnings=[f"Could not read Codex rollout: {exc}"],
+            )
+
+        with fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                timestamp = entry.get("timestamp")
+                if not isinstance(timestamp, str) or not timestamp:
+                    timestamp = fallback_ts
+                else:
+                    first_ts = first_ts or timestamp
+                    last_ts = timestamp
+
+                payload = entry.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if entry.get("type") == "turn_context":
+                    model = payload.get("model")
+                    if isinstance(model, str) and model:
+                        model_id = model
+                    continue
+                if entry.get("type") != "response_item":
+                    continue
+
+                kind = payload.get("type")
+                if kind == "message":
+                    role = payload.get("role")
+                    if role not in ("user", "assistant"):
+                        continue
+                    if role == "assistant" and payload.get("phase") not in (
+                        "commentary", "final_answer",
+                    ):
+                        continue
+                    public_text = _codex_public_content(role, payload.get("content"))
+                    if public_text.strip():
+                        messages.append({
+                            "speaker": role,
+                            "timestamp": timestamp,
+                            "message": public_text,
+                        })
+                elif kind in ("function_call", "custom_tool_call"):
+                    tool_name = _codex_tool_name(payload)
+                    tools_used[tool_name] += 1
+                    messages.append({
+                        "speaker": "assistant",
+                        "timestamp": timestamp,
+                        "message": "",
+                        "tool_calls": [{
+                            "tool": tool_name,
+                            "description": f"Called {tool_name}",
+                        }],
+                    })
+
+        if not messages:
+            warnings.append("Codex rollout parsed but produced no public dialogue")
+        return ImportResult(
+            harness="codex",
+            source_format="codex_rollout_jsonl",
+            messages=messages,
+            model_id=model_id,
+            model_name=f"Codex ({model_id})" if model_id else "Codex",
+            tools_used=tools_used,
+            started_at=first_ts or fallback_ts,
+            ended_at=last_ts or fallback_ts,
+            warnings=warnings,
+        )
+
+
 def _read_grok_summary(session_dir: Path) -> dict | None:
     path = session_dir / "summary.json"
     if not path.is_file():
@@ -497,6 +635,7 @@ class NoneImporter:
 
 _IMPORTERS: list[TranscriptImporter] = [
     GrokUpdatesImporter(),
+    CodexRolloutImporter(),
     ClaudeJsonlImporter(),
 ]
 

@@ -490,8 +490,8 @@ def cross_stream_claim_error(archive_dir: Path, session_id: str,
                 f"`{s.slug}` — a genuinely fresh conversation cannot already "
                 f"hold a claim, so this init has probably resolved another "
                 f"conversation's id. Re-run with --session-id <your "
-                f"conversation UUID> (on Claude Code: the UUID in your "
-                f"scratchpad directory path)."
+                f"full conversation UUID> (for Claude background jobs, "
+                f"read sessionId in ~/.claude/jobs/<job-id>/state.json)."
             )
     return None
 
@@ -545,11 +545,10 @@ def main():
         "--session-id",
         default=None,
         metavar="ID",
-        help="This conversation's harness id (Grok UUIDv7 or Claude JSONL "
-             "stem). REQUIRED for a real init (issue #108): the agent reads "
-             "it from its own context (on Claude Code, the scratchpad-path "
-             "UUID) and passes it. Omitting it is a hard error unless "
-             "--infer-session-id or --dry-run is given.",
+        help="Full conversation UUID or exact existing Claude JSONL stem. "
+             "For Claude background jobs, read sessionId in "
+             "~/.claude/jobs/<job-id>/state.json, not the short job directory "
+             "name. Required for real init unless --infer-session-id is used.",
     )
     parser.add_argument(
         "--infer-session-id",
@@ -570,6 +569,15 @@ def main():
 
     # Locate the .archive/ directory (container worktree OR in-place).
     start_dir = Path(args.project_path).resolve() if args.project_path else Path.cwd()
+    # Discovery and --list-streams can create the main stream, so reject a bad
+    # supplied identity before even those branches run.
+    if args.session_id is not None:
+        try:
+            args.session_id = _session.validate_explicit_session_id(
+                args.session_id, start_dir)
+        except ValueError as exc:
+            print(f'Error: {exc}', file=sys.stderr)
+            return 1
     archive_dir = _archive.resolve_archive_dir(start_dir)
     if archive_dir is None:
         print("Error: No .archive/transcripts/ found in directory hierarchy",
@@ -637,14 +645,15 @@ def main():
     # when init runs (helper-session activity peaks). Inference survives only
     # behind --infer-session-id, loud and refused under ambiguity. Dry-run
     # binds nothing, so it may still preview with an inferred id.
-    if args.session_id:
+    if args.session_id is not None:
         session_id = args.session_id
     elif not args.infer_session_id:
         if not args.dry_run:
             print(
                 "\nError: --session-id is required. Pass this conversation's "
-                "UUID (on Claude Code: the UUID in your scratchpad directory "
-                "path from your system prompt; on Grok: the UUIDv7 "
+                "UUID (on foreground Claude Code: the full scratchpad UUID; "
+                "for background jobs: sessionId in "
+                "~/.claude/jobs/<job-id>/state.json; on Grok: the UUIDv7 "
                 "conversation id). If it is genuinely unknowable, re-run "
                 "with --infer-session-id to accept live-scan inference "
                 "(issue #108: the freshest-JSONL guess is no longer "
@@ -731,8 +740,8 @@ def main():
                 f"{existing.get('stream') or 'none'}, status "
                 f"{existing.get('status')}). This init has probably resolved "
                 f"another conversation's id — re-run with --session-id <your "
-                f"conversation UUID> (on Claude Code: the UUID in your "
-                f"scratchpad directory path)."
+                f"full conversation UUID> (for Claude background jobs, "
+                f"read sessionId in ~/.claude/jobs/<job-id>/state.json)."
             )
             if not args.dry_run:
                 print(f"\nError: {msg}", file=sys.stderr)

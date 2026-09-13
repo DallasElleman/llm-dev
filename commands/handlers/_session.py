@@ -2,9 +2,9 @@
 
 Claude Code stores conversations as `~/.claude/projects/<hyphen-cwd>/<uuid>.jsonl`.
 Grok Build stores them as `$GROK_HOME/sessions/<urlencode(cwd)>/<uuidv7>/`
-(directory; `updates.jsonl` is the ACP log). Discovery prefers an explicit
-session id, then a recent Grok main session (skipping `session_kind=subagent`),
-then a recent Claude JSONL.
+(directory; `updates.jsonl` is the ACP log). Codex stores exact-ID rollouts in
+`$CODEX_HOME/sessions/YYYY/MM/DD/`. Live-session guessing remains limited to
+Grok and Claude; Codex import requires the conversation UUID.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote
@@ -19,6 +20,8 @@ from urllib.parse import quote, unquote
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 GROK_HOME = Path(os.environ.get("GROK_HOME", Path.home() / ".grok"))
 GROK_SESSIONS_DIR = GROK_HOME / "sessions"
+CODEX_HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+CODEX_SESSIONS_DIR = CODEX_HOME / "sessions"
 RECENT_WINDOW_SECONDS = 300  # files modified within last 5 min are "ours"
 # Shortest stored id accepted as a prefix of a real transcript stem. A UUID's
 # first block is 8 hex chars; anything shorter matches too much to be evidence.
@@ -34,6 +37,60 @@ MODEL_VARIANT_RE = re.compile(r'\[[^\]]*\]\s*$')
 SYNTHETIC_ID_RE = re.compile(
     r'^(?:claude|grok)-\d{3}-[0-9a-f]{6}$', re.IGNORECASE
 )
+_EXPLICIT_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+    re.IGNORECASE,
+)
+_UUIDISH_COMPACT_RE = re.compile(r'^(?:[0-9a-f]{8}|[0-9a-f]{31,33})$', re.IGNORECASE)
+_SAFE_STEM_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+
+
+def _looks_like_uuid(value: str) -> bool:
+    """Keep malformed UUIDs and eight-hex job IDs out of legacy-stem fallback."""
+    if _UUIDISH_COMPACT_RE.fullmatch(value):
+        return True
+    parts = value.split('-')
+    return (len(parts) == 5 and 30 <= len(value) <= 40
+            and 7 <= len(parts[0]) <= 9
+            and bool(re.fullmatch(r'[0-9a-f]+', parts[0], re.IGNORECASE))
+            and all(part.isascii() and part.isalnum() for part in parts[1:]))
+
+
+def validate_explicit_session_id(session_id: str, cwd: Path) -> str:
+    """Validate a newly supplied ID before it can bind archive state.
+
+    Stored legacy IDs and the general transcript resolver have separate recovery
+    rules. In particular, a unique *prefix* lookup is never proof that the
+    prefix is the conversation's complete identity.
+    """
+    if isinstance(session_id, str):
+        if _EXPLICIT_UUID_RE.fullmatch(session_id):
+            return str(uuid.UUID(session_id))
+        if SYNTHETIC_ID_RE.fullmatch(session_id):
+            return session_id
+        if (not _looks_like_uuid(session_id)
+                and _SAFE_STEM_RE.fullmatch(session_id)
+                and session_id.lower() != 'unknown'
+                and not session_id.lower().startswith('agent-')):
+            # Preserve non-UUID Claude stems actually present on disk. Only
+            # exact, regular files count: find_session_jsonl also accepts
+            # prefixes, which is the mistake this guard closes.
+            scoped = PROJECTS_DIR / encode_claude_cwd(cwd) / f'{session_id}.jsonl'
+            try:
+                if scoped.is_file() and not scoped.is_symlink():
+                    return session_id
+                matches = list(PROJECTS_DIR.rglob(f'{session_id}.jsonl'))
+                if (len(matches) == 1 and matches[0].is_file()
+                        and not matches[0].is_symlink()):
+                    return session_id
+            except OSError:
+                pass
+    raise ValueError(
+        f'Invalid --session-id {session_id!r}: supply the full conversation '
+        'UUID or an exact Claude transcript stem. A Claude background-job '
+        'directory uses a short job ID; read the full `sessionId` in '
+        '~/.claude/jobs/<job-id>/state.json.'
+    )
 
 
 @dataclass(frozen=True)
@@ -401,11 +458,72 @@ def find_grok_session_dir(session_id: str, cwd: Path | None = None) -> Path | No
     return None
 
 
+def _first_codex_session_meta(source: Path) -> dict | None:
+    """Read the owning metadata, not later metadata copied during a fork."""
+    try:
+        with source.open("r", encoding="utf-8") as fh:
+            for index, line in enumerate(fh):
+                if index >= 100:
+                    break
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict) or entry.get("type") != "session_meta":
+                    continue
+                payload = entry.get("payload")
+                return payload if isinstance(payload, dict) else None
+    except OSError:
+        return None
+    return None
+
+
+def find_codex_rollout(session_id: str, cwd: Path) -> Path | None:
+    """Find one rollout whose filename, owner id, and project all agree.
+
+    A child rollout may repeat its parent's `session_id` in metadata. Only
+    `payload.id` identifies the file's own conversation; accepting that other
+    field would silently archive a subagent as its parent.
+    """
+    try:
+        canonical_id = str(uuid.UUID(session_id))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if session_id.lower() != canonical_id or not CODEX_SESSIONS_DIR.is_dir():
+        return None
+
+    matches: list[Path] = []
+    try:
+        candidates = CODEX_SESSIONS_DIR.rglob(f"rollout-*-{canonical_id}.jsonl")
+        for source in candidates:
+            if source.is_symlink() or not source.is_file():
+                continue
+            meta = _first_codex_session_meta(source)
+            if not meta or meta.get("id") != canonical_id:
+                continue
+            session_cwd = meta.get("cwd")
+            if not isinstance(session_cwd, str) or not session_cwd:
+                continue
+            try:
+                # A session may start in a project subdirectory, but never
+                # attribute a different project's rollout to this archive.
+                Path(session_cwd).resolve().relative_to(cwd.resolve())
+            except (OSError, ValueError):
+                continue
+            matches.append(source)
+            if len(matches) > 1:
+                return None  # ambiguous duplicate id; never pick by mtime
+    except OSError:
+        return None
+    return matches[0] if matches else None
+
+
 def find_session_source(session_id: str, cwd: Path) -> Path | None:
     """Locate the transcript file for a stored session id.
 
     Grok: `<sessions>/<urlencode(cwd)>/<id>/updates.jsonl` (or the session dir).
     Claude: `<projects>/<hyphen-cwd>/<id>.jsonl`.
+    Codex: `<sessions>/YYYY/MM/DD/rollout-<timestamp>-<id>.jsonl`.
     """
     if not session_id or session_id == "unknown":
         return None
@@ -413,6 +531,9 @@ def find_session_source(session_id: str, cwd: Path) -> Path | None:
     if grok_dir is not None:
         updates = grok_dir / "updates.jsonl"
         return updates if updates.is_file() else grok_dir
+    codex = find_codex_rollout(session_id, cwd)
+    if codex is not None:
+        return codex
     return find_session_jsonl(session_id, cwd)
 
 
