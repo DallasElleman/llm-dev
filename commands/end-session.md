@@ -44,9 +44,14 @@ next session, then archive this conversation as a JSON transcript.
    set; otherwise the plugin directory shown in this command's listing. Do
    not expand an empty env var.
 
-   **Always pass `--session-id <your conversation UUID>`** (on Claude Code:
-   the UUID in your scratchpad directory path; on Grok: the UUIDv7
-   conversation id). The numbered in-progress manifest remains the identity
+   **Always pass `--session-id <your conversation UUID>`** (on foreground
+   Claude Code: the full UUID in your scratchpad directory path; for a
+   background job, read `sessionId` from
+   `~/.claude/jobs/<job-id>/state.json` because the directory name is a
+   short job ID; on Grok: the UUIDv7 conversation id; on Codex: the full
+   current thread UUID). Codex rollout discovery uses this exact ID and the
+   project path; it never guesses from the newest rollout. The numbered
+   in-progress manifest remains the identity
    authority — an explicit `--session-id` that disagrees with it corrects the
    manifest loudly (the sanctioned recovery for a wrongly-bound init). When
    **no** manifest carries the number, the handler now hard-errors instead of
@@ -188,11 +193,19 @@ and no stream interaction.
    `--session-id`, or `--infer-session-id` for pre-manifest legacy sessions.
    An explicit `--session-id` overrides the manifest's recorded id, loudly
    correcting it (the sanctioned recovery for a wrongly-bound init).
-2. **Converts the harness transcript** — Claude Code JSONL or Grok
-   `updates.jsonl` → llm-dev JSON. If no supported transcript is found,
-   archives notes + handoff with a warning and an empty dialogue.
+2. **Converts the harness transcript** — Claude Code JSONL, Grok
+   `updates.jsonl`, or a Codex rollout JSONL → llm-dev JSON. Codex import
+   preserves public user/assistant text, timestamps, model, and tool names;
+   non-text input gets a placeholder. It excludes reasoning, system/developer
+   instructions, tool arguments, and tool results. File changes from Codex's
+   wrapped tool calls are not inferred. A real stored ID with no matching
+   transcript is a hard error; never substitute another session.
 3. **Generates outcomes** — Analyzes conversation for files created/modified
-4. **Scans for PII** — Checks for home paths, names, emails, potential secrets before commit
+4. **Scans for PII** — Checks home paths, names, known usernames in transcript
+   text, emails, and potential secrets before commit. Home paths, names and
+   personal emails are redacted by default; potential secrets are reported for
+   review. The known-username rule uses identities evidenced by home paths in
+   this transcript and applies to narrative fields, not JSON keys or roles.
 5. **Finalizes the manifest** — Sets `ended_at`, `status: complete`, `title`,
    `conversation_id`, and the `files` map on this session's manifest
 6. **Regenerates the derived index** — `.archive/transcripts/_index.md` is
@@ -212,13 +225,13 @@ and no stream interaction.
 - `title` — Brief title, 3-7 words (e.g., "Plugin Development and Testing")
 - `--stream <slug>` — Override stream slug for this session. By default, end-session looks up which stream (if any) is claimed by this session's ID in `.archive/streams/<slug>.json`; pass `--stream` only to force a specific slug or override.
 - `--topics "t1, t2"` — Optional comma-separated topics (auto-generated if omitted)
-- `--no-sanitize` — Disable automatic PII redaction. By default `/end-session` redacts home paths and participant names; pass this to restore the interactive commit/sanitize/abort prompt (or, non-interactively, the `PII_REVIEW_NEEDED` abort). (`--sanitize` is still accepted but redundant.)
+- `--no-sanitize` — Disable automatic PII redaction. By default `/end-session` redacts home paths, participant names, home-path-evidenced standalone usernames in transcript text, and personal emails; pass this to restore the interactive commit/sanitize/abort prompt (or, non-interactively, the `PII_REVIEW_NEEDED` abort). (`--sanitize` is still accepted but redundant.)
 - `--no-push` — Skip pushing the archive commit. By default the handler pushes the current branch to its remote (best-effort; a missing upstream just warns).
 - `--force` — Re-finalize even if this session number's manifest is already `complete` (a re-run). Without it, an already-archived number is a hard error to prevent silently overwriting a completed manifest. A session that claimed its stream *after* init has no stream on its manifest, and the claim is released by the first run — so a `--force` re-run of one of those also needs an explicit `--stream <slug>`.
 - `--allow-empty` — Archive even when a transcript file was found on disk but imported **zero** dialogue entries. Without it this is a hard error: a file that imports to nothing is the signature of a broken importer, not an empty session (issue #96 shipped precisely because nothing checked). Use it only for a session that genuinely had no dialogue.
 - `--no-handoff` — Archive without requiring a session-handoff at the resolved stream slug (downgrades the missing-handoff hard error to a notice).
 - `--project-path PATH` — Explicit project root to search from (default: cwd). Use this when running from a parent workspace so the correct project's `.archive/` is targeted instead of the workspace's.
-- `--session-id ID` — This conversation's harness id. **Always pass it** — it cross-corrects a wrongly-bound manifest and is the required recovery input when no manifest carries the session number.
+- `--session-id ID` — This conversation's full UUID or exact existing Claude JSONL stem. Truncated IDs are rejected before archival begins. **Always pass it** — it cross-corrects a wrongly-bound manifest and is the required recovery input when no manifest carries the session number.
 - `--infer-session-id` — Last-resort opt-in to freshest-JSONL inference when no manifest carries the number (pre-manifest legacy sessions only). Prints what it inferred; refused when any other in-progress manifest exists.
 - `--dry-run` — Preview without writing files
 

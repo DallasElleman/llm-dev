@@ -1,6 +1,8 @@
 # llm-dev
 
 A plugin for LLM-assisted development workflows on Claude Code and Grok Build.
+Its Python session handlers can also import Codex rollout transcripts by exact
+conversation UUID; this does not install slash commands in Codex.
 
 ## Overview
 
@@ -97,7 +99,7 @@ Copies `.workspace-template/` to the target directory and initializes a git repo
 Initialize a conversation session for transcript tracking.
 
 ```
-/llm-dev:init-session [--model MODEL] [--user USERNAME] [--stream SLUG] [--no-stream] [--dry-run]
+/llm-dev:init-session --session-id <full-conversation-uuid> [--model MODEL] [--user USERNAME] [--stream SLUG] [--no-stream] [--dry-run]
 ```
 
 What it does:
@@ -105,6 +107,10 @@ What it does:
 2. Adds a placeholder entry to the transcript index
 3. Creates a dated session-notes file at `.archive/session-notes/YYYYMMDD-NNN-session-notes.md`
 4. Resolves and prints paths to the **prior session's** transcript, notes, and handoff for continuity
+
+Use the full conversation UUID. For Claude Code background jobs, read `sessionId`
+from `~/.claude/jobs/<job-id>/state.json`; the job directory name is a short ID.
+The handler rejects truncated IDs before creating session state.
 
 **Stream Selection** — when run, the handler offers a stream to claim:
 - **No arg** (interactive): prints the stream registry and prompts you to pick. When exactly one `active` stream exists, pressing Enter selects it.
@@ -123,7 +129,7 @@ The selected stream determines which prior handoff loads as resume context, whet
 Wind the session down — finalize session notes, write a handoff document, and archive the transcript.
 
 ```
-/llm-dev:end-session <number> "<title>" [--topics "t1, t2"] [--stream SLUG] [--sanitize] [--dry-run]
+/llm-dev:end-session <number> "<title>" --session-id <full-conversation-uuid> [--topics "t1, t2"] [--stream SLUG] [--dry-run]
 ```
 
 **Flow (Claude performs these in order):**
@@ -134,10 +140,11 @@ Wind the session down — finalize session notes, write a handoff document, and 
 5. **Run the handler** to archive everything.
 
 **What the handler does automatically:**
-- Finds session ID from the index placeholder set by `/init-session`
+- Adopts the session ID from the in-progress manifest and validates a supplied override
 - Converts JSONL → llm-dev JSON transcript format
 - Generates outcomes from file operations in the conversation
-- Scans for PII (home paths, names, emails, potential secrets) before commit
+- Redacts home paths, participant names, home-path-evidenced usernames in transcript
+  text, and personal emails; reports potential secrets for review
 - Updates transcript index (replaces `[In Progress]` placeholder)
 - Updates CHANGELOG (adds entry at top, reverse-chronological)
 - Commits the bundle: transcript + session-notes + session-handoff
@@ -152,7 +159,9 @@ Wind the session down — finalize session notes, write a handoff document, and 
 - `<title>` — brief title, 3–7 words
 - `--stream SLUG` — override stream slug (normally auto-detected from registry)
 - `--topics "t1, t2"` — comma-separated topics (auto-generated if omitted)
-- `--sanitize` — automatically redact PII without prompting
+- `--session-id` — full conversation UUID or an exact existing Claude JSONL stem;
+  truncated IDs are rejected
+- `--sanitize` — accepted for compatibility; redaction is already the default
 - `--dry-run` — preview without writing files
 
 ### /stream
@@ -271,11 +280,18 @@ Session tracking is **optional** and **command-driven**:
 
 1. Run `/llm-dev:init-session` to begin tracking. Creates a placeholder in the transcript index, scaffolds a session-notes file, and surfaces the prior session's transcript / notes / handoff for continuity.
 2. Throughout the session, update `.archive/session-notes/YYYYMMDD-NNN-session-notes.md` with what worked, lessons learned, mistakes made, and wrong assumptions. Capture wins as well as corrections.
-3. At session end, run `/llm-dev:end-session`. Claude finalizes the session notes, writes a forward-looking handoff document, and the handler archives the conversation and commits the bundle.
+3. At session end, run `/llm-dev:end-session`. Finalize the session notes, write a forward-looking handoff document, and the handler archives the conversation and commits the bundle.
+
+For Codex, invoke the Python `init-session.py` and `end-session.py` handlers from
+the plugin directory with `--session-id <current-thread-uuid>` and
+`--project-path <project-root>`. Set `CODEX_HOME` only if Codex stores its
+sessions somewhere other than `~/.codex`. Exact UUID and project matching
+protect against importing a different rollout.
 
 Archives include:
-- Verbatim dialogue preservation (JSONL → llm-dev JSON)
-- Auto-generated outcomes from file operations
+- Public user/assistant dialogue preservation (JSONL → llm-dev JSON); Codex
+  non-text inputs use placeholders, and internal reasoning/tool payloads are excluded
+- Auto-generated file-operation outcomes where the harness importer exposes them
 - Automatic index/CHANGELOG updates
 - Per-session notes for cross-session learning
 - Per-session handoffs as high-signal re-entry points for the next session
